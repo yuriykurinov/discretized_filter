@@ -11,7 +11,7 @@ np.random.seed(seed)
 
 @njit(fastmath=True, nogil=True, cache=True)
 def h(t, y, theta):
-    return (y[1] / y[0]).reshape(-1, 1)
+    return (y[:, 1] / y[:, 0])
 
 @njit(nogil=True, cache=True)
 def g(t, y, theta):
@@ -43,7 +43,7 @@ N = Lambda.shape[0]
 #правая граница временного промежутка
 T = 100
 
-ht = 1e-4#шаг моделирования
+ht = 1e-3#шаг моделирования
 ht0 = np.sqrt(ht)
 t_net_modeling = np.array([t*ht for t in range(ceil(T/ht))])
 

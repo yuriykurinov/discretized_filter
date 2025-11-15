@@ -6,43 +6,45 @@ from utils import norm
 
 @nb.njit(
     nb.float64(
-        nb.uintp, nb.uintp, nb.float64, nb.float64,
-        nb.float64[:, :], nb.float64[:, :], nb.float64[:]
+        nb.uintp, nb.uintp, nb.float64, nb.float64[:],
+        nb.float64[:, :, :], nb.float64[:, :, :], nb.float64[:]
     ),
     fastmath=True,
     inline='always',
 )
-def zero_jump_kernel(m, y, obs, h, F, G, lam):
-    sigma_sq_2 = 2 * h * G[m, y]
-    log_res = (h / lam[m] - 0.5 * np.log(np.pi * sigma_sq_2))\
-            - (h * F[m, y] - obs)**2 / sigma_sq_2
-    return np.exp(log_res)
+def zero_jump_kernel(m, y, obs, ht, F, G, lam):
+    sigma_sq_2 = 2 * ht * G[m, y]
+    log_res = (ht / lam[m] - 0.5 * np.log(np.pi * sigma_sq_2))\
+            - (ht * F[m, y] - obs)**2 / sigma_sq_2
+    return np.exp(np.sum(log_res))
     # return np.exp(
-    #     h / lam[m] - (h * F[m, y] - obs) ** 2 / sigma_sq_2
+    #     ht / lam[m] - (ht * F[m, y] - obs) ** 2 / sigma_sq_2
     # ) / np.sqrt(np.pi*sigma_sq_2)
 
 
 @nb.njit(
     nb.float64(
         nb.float64, nb.uintp, nb.uintp, nb.uintp, nb.uintp,
-        nb.float64, nb.float64[:, :], nb.float64[:, :],
-        nb.float64[:, :], nb.float64[:, :], nb.float64
+        nb.float64[:], nb.float64[:, :], nb.float64[:, :, :],
+        nb.float64[:, :, :], nb.float64[:, :], nb.float64
     ),
     fastmath=True,
     #inline='always',
 )
-def integrand(tau, m, y, n, v, obs, pi, F, G, Lambda, h):
+def integrand(tau, m, y, n, v, obs, pi, F, G, Lambda, ht):
     if pi[m, y] == 0:
         return 0
     else:
         return (
             pi[m, y]
             * Lambda[n, m] / Lambda[n, n]**2
-            * np.exp(h / Lambda[m, m])
-            * norm(
-                obs,
-                tau * F[n, v] + (h - tau) * F[m, y],
-                tau * G[n, v] + (h - tau) * G[m, y],
+            * np.exp(ht / Lambda[m, m])
+            * np.prod(
+                norm(
+                    obs,
+                    tau * F[n, v] + (ht - tau) * F[m, y],
+                    tau * G[n, v] + (ht - tau) * G[m, y],
+                )
             )
             * (1 - np.exp(tau / Lambda[n, n]))
             * np.exp(tau * (1 / Lambda[n, n] - 1 / Lambda[m, m]))
@@ -52,18 +54,18 @@ def integrand(tau, m, y, n, v, obs, pi, F, G, Lambda, h):
 @nb.njit(
     nb.float64(
         nb.uintp, nb.uintp, nb.uintp, nb.uintp,
-        nb.float64, nb.float64,
-        nb.float64[:, :], nb.float64[:, :],
+        nb.float64[:], nb.float64,
+        nb.float64[:, :, :], nb.float64[:, :, :],
         nb.float64[:, :], nb.float64[:, :],
         nb.uintp, nb.uintp
     ),
     #inline='always',
     fastmath=True,
 )
-def single_jump_kernel(m, y, n, v, obs, h, F, G, Lambda, pi, method, n_points):
+def single_jump_kernel(m, y, n, v, obs, ht, F, G, Lambda, pi, method, n_points):
     #(m, y) -> (n, v)
     res = 0.0
-    step = h / n_points
+    step = ht / n_points
     tau = 0.0
 
     if method == 0:  # mid rectangular
@@ -74,7 +76,7 @@ def single_jump_kernel(m, y, n, v, obs, h, F, G, Lambda, pi, method, n_points):
         tau = step
 
     for _ in range(n_points):
-        res += integrand(tau, m, y, n, v, obs, pi, F, G, Lambda, h) * step
+        res += integrand(tau, m, y, n, v, obs, pi, F, G, Lambda, ht) * step
         tau += step
     return res
 
@@ -82,9 +84,9 @@ def single_jump_kernel(m, y, n, v, obs, h, F, G, Lambda, pi, method, n_points):
 @nb.njit(
     nb.float64[:, :](
         nb.float64[:, :],
-        nb.float64,
-        nb.float64[:, :],
-        nb.float64[:, :],
+        nb.float64[:],
+        nb.float64[:, :, :],
+        nb.float64[:, :, :],
         nb.float64[:, :],
         nb.float64[:],
         nb.float64[:, :],
@@ -96,18 +98,18 @@ def single_jump_kernel(m, y, n, v, obs, h, F, G, Lambda, pi, method, n_points):
     fastmath=True,
     parallel=True,
 )
-def filter_step(psi, obs, F, G, Lambda, lam, pi, h, delta, N, n_points):
+def filter_step(psi, obs, F, G, Lambda, lam, pi, ht, delta, N, n_points):
     res = np.zeros(psi.shape)
 
     for y in nb.prange(psi.shape[1]):
         for m in range(N):
-            res[m, y] += psi[m, y] * zero_jump_kernel(m, y, obs, h, F, G, lam)
+            res[m, y] += psi[m, y] * zero_jump_kernel(m, y, obs, ht, F, G, lam)
             for n in range(N):
                 if m != n:
                     for v in range(psi.shape[1]):
                         res[m, y] += (
                             single_jump_kernel(
-                                m, y, n, v, obs, h, F, G, Lambda, pi,
+                                m, y, n, v, obs, ht, F, G, Lambda, pi,
                                 0, n_points  # mid-rectangular method = 0
                             )
                             * psi[n, v]
@@ -118,7 +120,7 @@ def filter_step(psi, obs, F, G, Lambda, lam, pi, h, delta, N, n_points):
 
 class Filter(object):
     def __init__(
-        self, pi_init, pi, M_net, g, sigma, 
+        self, pi_init, pi, M_net, g, sigma, h, 
         N, Lambda, ht, delta, n_points=3,
         filter_step=filter_step
     ):
@@ -131,8 +133,12 @@ class Filter(object):
         self.n_points = n_points
         self.delta = delta
         self.filter_step = filter_step
-        self.F = np.repeat(g(-1, M_net, -1)[np.newaxis, ...], N, axis=0)
-        self.G = np.repeat((sigma(-1, M_net, -1)**2)[np.newaxis, ...], N, axis=0)
+
+        tmp = np.stack([g(-1, M_net, -1), h(-1, M_net, -1)], axis=-1)
+        self.F = np.repeat(tmp[np.newaxis, ...], N, axis=0)
+        
+        tmp = np.stack([sigma(-1, M_net, -1)**2, h(-1, M_net, -1)], axis=-1)
+        self.G = np.repeat(tmp[np.newaxis, ...], N, axis=0)
 
         self.psi = pi_init.copy()
     

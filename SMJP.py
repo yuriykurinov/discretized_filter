@@ -114,12 +114,11 @@ def make_xi(g, dty, dtmc, ht, ht0, T, sigma):
 @njit(fastmath=True, nogil=True, cache=True)
 def make_eta(h, dtmc, dty, ht, T):
     eta_jumps = []
-    pr = ht*h(-1, dty.T, -1)
+    pr = ht*h(-1, dty, -1)
     a = np.array([True, False])
     for t in range(ceil(T/ht)):
-        for i in range(pr.shape[1]):
-            if choice(a, np.array([pr[t][i], 1-pr[t][i]])):
-                eta_jumps.append(t*ht)
+        if choice(a, np.array([pr[t], 1-pr[t]])):
+            eta_jumps.append(t*ht)
     return np.array(eta_jumps)
 
 @njit(nogil=True, cache=True)
