@@ -43,7 +43,7 @@ N = Lambda.shape[0]
 #правая граница временного промежутка
 T = 100
 
-ht = 1e-3#шаг моделирования
+ht = 1e-4#шаг моделирования
 ht0 = np.sqrt(ht)
 t_net_modeling = np.array([t*ht for t in range(ceil(T/ht))])
 
