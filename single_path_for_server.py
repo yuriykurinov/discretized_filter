@@ -3,18 +3,15 @@ import pickle
 
 from config import *
 from SMJP import (
-    sparse_mc, get_y_uniform, to_discrete, 
+    sparse_mc, get_y_uniform, 
     make_discretized_xi, make_discretized_eta
 )
 from filter import Filter
 
 theta, y, t = sparse_mc(p0, Lambda, lam, T, get_y_uniform)
 
-dtmc = to_discrete(theta, t, T, ht)
-dty = to_discrete(y, t, T, ht)
-
 dxi = make_discretized_xi(t_net_filtering, g, sigma, theta, y, t)
-deta = make_discretized_eta(t_net_filtering, h, dtmc, dty, ht, T)
+deta = make_discretized_eta(t_net_filtering, h, theta, y, t)
 
 filter = Filter(
     p0[:, np.newaxis] * pi_uniform, 
@@ -27,7 +24,8 @@ est = filter.estimate()
 theta_est = [est[0]]
 y_est = [est[1]]
 
-for i, obs in enumerate(np.stack([dxi[1:100], deta[1:100]], axis=-1), start=1):
+
+for i, obs in enumerate(np.stack([dxi[1:], deta[1:]], axis=-1), start=1):
     filter.update(obs)
     est = filter.estimate()
     # if np.any(np.isnan(est[0])) or np.any(np.isnan(est[1])):

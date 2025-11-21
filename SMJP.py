@@ -87,40 +87,6 @@ def sparse_mc(p0, Lambda, lam, T, get_y):
             break
     return np.array(res_theta, dtype=np.int64), np.array(res_y), np.array(res_t)
 
-#переводит кусочно-постоянное представление в дискретное
-@njit(fastmath=True)
-def to_discrete(jumps, time, T, h):
-    res = np.empty((ceil(T/h),) + np.shape(jumps[0]), dtype=jumps.dtype)
-    j = 0
-    i = 0
-    for s in time:
-        for k in range(j, ceil(s/h)):
-            res[k] = jumps[i]
-        j = k + 1
-        i += 1
-    for k in range(j, ceil(T/h)):
-        res[k] = jumps[-1]
-    return res
-
-@njit(nogil=True, cache=True)
-def make_xi(g, dty, dtmc, ht, ht0, T, sigma):
-    xi = np.empty((dty.shape[0], R))
-    G = g(-1, dty.T, -1).T
-    xi[0] = G[0]*ht
-    for t in range(1, dty.shape[0]):
-        xi[t] = xi[t-1] + G[t-1]*ht + sigma*ht0*np.random.normal(0, 1, G.shape[1])
-    return xi
-
-@njit(fastmath=True, nogil=True, cache=True)
-def make_eta(h, dtmc, dty, ht, T):
-    eta_jumps = []
-    pr = ht*h(-1, dty, -1)
-    a = np.array([True, False])
-    for t in range(ceil(T/ht)):
-        if choice(a, np.array([pr[t], 1-pr[t]])):
-            eta_jumps.append(t*ht)
-    return np.array(eta_jumps)
-
 @njit(nogil=True, cache=True)
 def make_discretized_xi(t_net_filtering, g, sigma, theta, Y, smjp_jumps):
     dxi = np.empty(t_net_filtering.shape[0]) #TODO dim
@@ -138,18 +104,16 @@ def make_discretized_xi(t_net_filtering, g, sigma, theta, Y, smjp_jumps):
     return dxi
 
 @njit(nogil=True, cache=True)
-def make_discretized_eta(t_net_filtering, h, dtmc, dty, ht, T):
-    eta = make_eta(h, dtmc, dty, ht, T)
-    disc_eta = np.empty(t_net_filtering.shape[0])
-    eta_pos = 0
+def make_discretized_eta(t_net_filtering, h, theta, Y, smjp_jumps):
+    deta = np.empty(t_net_filtering.shape[0])
+    H = h(-1, Y, -1)
 
-    for i in range(t_net_filtering.shape[0]):
-        eta_increment = 0
+    smjp_pos = 0
 
-        while (eta_pos < eta.shape[0]) and (t_net_filtering[i] > eta[eta_pos]):
-            eta_increment += 1
-            eta_pos += 1
-        
-        disc_eta[i] = eta_increment
+    deta[0] = 0
 
-    return disc_eta
+    for i in range(1, t_net_filtering.shape[0]):
+        mean, var, smjp_pos = get_moments(H, H, i, t_net_filtering, smjp_pos, smjp_jumps)
+        deta[i] = np.random.poisson(mean)
+
+    return deta

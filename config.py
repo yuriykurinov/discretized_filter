@@ -43,15 +43,10 @@ N = Lambda.shape[0]
 #правая граница временного промежутка
 T = 100
 
-ht = 1e-4#шаг моделирования
-ht0 = np.sqrt(ht)
-t_net_modeling = np.array([t*ht for t in range(ceil(T/ht))])
-
-N_h = 100
-ht1 = ht * N_h #шаг фильтрации
-ht10 = np.sqrt(ht1)
+ht = 1e-2 #шаг фильтрации
+ht10 = np.sqrt(ht)
 #сетка
-t_net_filtering = np.array([t*ht1 for t in range(ceil(T/ht1))])
+t_net_filtering = np.array([t*ht for t in range(ceil(T/ht))])
 
 _, _, vh = np.linalg.svd(Lambda.T)
 p0 = vh[-1]
@@ -108,5 +103,3 @@ pi_uniform, pi_3point, pi_triangular_2, pi_arcsine, y_means_uniform,\
     y_means_arcsine, y_means_triang, y_means_3point, y_means_2point =\
         get_distributions(N, M_net, net1, net2, y1_intervals, y2_intervals, delta1, delta2)
 
-M1_psi = -1#int(45 / ht)
-M2_psi = -1#int(65 / ht)

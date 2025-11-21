@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from config import N, T, ht, ht1, N_h, M, t_net_filtering
+from config import N, T, ht, M, t_net_filtering
 from math import ceil
 
 theta_labels = ['$\\theta_t = e_1$', '$\\theta_t = e_2$',
@@ -139,7 +139,12 @@ def plot_obs(theta, y, t, dxi, deta):
 
     ######   Y1   ######
 
-    line1, = ax[0].plot(t_net_filtering[1:], dxi[1:] / ht1, lw=0.6, color='firebrick')
+    line1, = ax[0].plot(
+        t_net_filtering[1:dxi.shape[0]], 
+        dxi[1:] / ht, 
+        lw=0.6, 
+        color='firebrick'
+    )
     line2, = ax[0].step(
         np.concatenate([[0], t]),
         np.concatenate([[y[0, 0]], y[:, 0]]), 
