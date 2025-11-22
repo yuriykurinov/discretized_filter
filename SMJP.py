@@ -13,27 +13,37 @@ def choice(a, p):
 #генерация Y по theta
 #равномерные
 @njit(fastmath=True)
-def get_y_uniform(state):
-     return [np.random.uniform(y1_intervals[state][0], y1_intervals[state][1]),
-             np.random.uniform(y2_intervals[state][0], y2_intervals[state][1])]
+def get_y_uniform(state, y_intervals):
+    res = []
+    for y_interval in y_intervals:
+        res.append(
+            np.random.uniform(y_interval[state][0], y_interval[state][1])
+        )
+    return res
 
 @njit(fastmath=True)
-def get_y_triangular(state):
-    return [np.random.triangular(y1_intervals[state][0], 
-                                (y1_intervals[state][1] + y1_intervals[state][0]) / 2, 
-                                 y1_intervals[state][1]),
-            np.random.triangular(y2_intervals[state][0], 
-                                (y2_intervals[state][1] + y2_intervals[state][0]) / 2, 
-                                 y2_intervals[state][1])]
-@njit(fastmath=True)
-def get_y_triangular_2(state):
-    return [np.random.triangular(y1_intervals[state][0], 
-                                 y1_intervals[state][1], 
-                                 y1_intervals[state][1]),
-            np.random.triangular(y2_intervals[state][0], 
-                                 y2_intervals[state][1], 
-                                 y2_intervals[state][1])]
+def get_y_triangular(state, y_intervals):
+    res = []
+    for y_interval in y_intervals:
+        res.append(
+            np.random.triangular(y_interval[state][0], 
+                                (y_interval[state][1] + y_interval[state][0]) / 2, 
+                                 y_interval[state][1])
+        )
+    return res
 
+@njit(fastmath=True)
+def get_y_triangular_2(state, y_intervals):
+    res = []
+    for y_interval in y_intervals:
+        res.append(
+            np.random.triangular(y_interval[state][0], 
+                                 y_interval[state][1], 
+                                 y_interval[state][1])
+        )
+    return res
+
+###########
 @njit(fastmath=True)
 def get_y_3point(state):
     return [choice(points3_1[state], p_3point),
@@ -49,10 +59,10 @@ def arcsine_dist(a, b):
 def get_y_arcsine(state):
      return [arcsine_dist(y1_intervals[state][0], y1_intervals[state][1]),
              arcsine_dist(y2_intervals[state][0], y2_intervals[state][1])]
-
+###########
 
 @jit(nopython=True, fastmath=True)
-def sparse_mc(p0, Lambda, lam, T, get_y):
+def sparse_mc(p0, Lambda, lam, T, get_y, y_intervals):
     #начальные условия и т.п.
     res_theta = []
     res_y = []
@@ -63,7 +73,7 @@ def sparse_mc(p0, Lambda, lam, T, get_y):
 
     state = choice(k, p0)
     t = 0.
-    Y = get_y(state)
+    Y = get_y(state, y_intervals)
     res_theta.append(state)
     res_y.append(Y)
 
@@ -77,7 +87,7 @@ def sparse_mc(p0, Lambda, lam, T, get_y):
         if t <= T:
             pr_state = state
             state = choice(state_exc[pr_state], pr[pr_state])
-            Y = get_y(state)
+            Y = get_y(state, y_intervals)
             res_theta.append(state)
             res_y.append(Y)
             #добавляю момент ИЗМЕНЕНИЯ состояния

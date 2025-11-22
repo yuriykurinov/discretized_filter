@@ -120,7 +120,7 @@ def filter_step(psi, obs, F, G, Lambda, lam, pi, ht, delta, N, n_points):
 
 class Filter(object):
     def __init__(
-        self, pi_init, pi, M_net, g, sigma, h, 
+        self, pi_init, pi, M_net, F, G,
         N, Lambda, ht, delta, n_points=3,
         filter_step=filter_step
     ):
@@ -134,11 +134,8 @@ class Filter(object):
         self.delta = delta
         self.filter_step = filter_step
 
-        tmp = np.stack([g(-1, M_net, -1), h(-1, M_net, -1)], axis=-1)
-        self.F = np.repeat(tmp[np.newaxis, ...], N, axis=0)
-        
-        tmp = np.stack([sigma(-1, M_net, -1)**2, h(-1, M_net, -1)], axis=-1)
-        self.G = np.repeat(tmp[np.newaxis, ...], N, axis=0)
+        self.F = F        
+        self.G = G
 
         self.psi = pi_init.copy()
     

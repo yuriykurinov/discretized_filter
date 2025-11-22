@@ -60,53 +60,71 @@ def arcsine_dist_pdf(net, a, b, delta):
     return res / (res.sum() * delta)
 
 
-def get_distributions(N, M_net, net1, net2, y1_intervals, y2_intervals, delta1, delta2):
+def get_distributions(N, M_net, nets, y_intervals, deltas):
     #условная плотность y при условии theta
     pi_uniform = np.empty((N, M_net.shape[0]))
     for n in range(N):
-        tmp1 = unif(net1, y1_intervals[n][0], y1_intervals[n][1])
-        tmp2 = unif(net2, y2_intervals[n][0], y2_intervals[n][1])
-        pi_uniform[n] = cartesian_product([tmp1, tmp2]).prod(axis=1)
+        tmp = []
+        for y_intervals_ith_dim, net in zip(y_intervals, nets):
+            tmp.append(
+                unif(net, y_intervals_ith_dim[n][0], y_intervals_ith_dim[n][1])
+            )
+        pi_uniform[n] = cartesian_product(tmp).prod(axis=1)
 
     pi_3point = np.zeros((N, M_net.shape[0]))
     for n in range(N):
-        tmp1 = np.zeros(net1.shape[0])
-        tmp2 = np.zeros(net2.shape[0])
-        tmp1[np.argmin(np.abs(net1 - y1_intervals.T[0][n]))] = 1
-        tmp1[np.argmin(np.abs(net1 - y1_intervals.T[1][n]))] = 1
-        tmp1[
-            np.argmin(np.abs(net1 - (y1_intervals.T[0][n] + y1_intervals.T[1][n])/2))
-        ] = 1
-        tmp1 /= 3*delta1
-        tmp2[np.argmin(np.abs(net2 - y2_intervals.T[0][n]))] = 1
-        tmp2[np.argmin(np.abs(net2 - y2_intervals.T[1][n]))] = 1
-        tmp2[np.argmin(np.abs(net2 - (y2_intervals.T[0][n] + y2_intervals.T[1][n])/2))] = 1
-        tmp2 /= 3*delta2
-        pi_3point[n] = cartesian_product([tmp1, tmp2]).prod(axis=1)
+        tmp = []
+        for y_intervals_ith_dim, net, delta in zip(y_intervals, nets, deltas):
+            tmp.append(
+                np.zeros(net.shape[0])
+            )
+            tmp[-1][np.argmin(np.abs(net - y_intervals_ith_dim[n][0]))] = 1
+            tmp[-1][np.argmin(np.abs(net - y_intervals_ith_dim[n][1]))] = 1
+            tmp[-1][
+                np.argmin(
+                    np.abs(
+                        net - (y_intervals_ith_dim[n][0] + y_intervals_ith_dim[n][1])/2
+                    )
+                )
+            ] = 1
+            tmp[-1] /= 3*delta
+
+        pi_3point[n] = cartesian_product(tmp).prod(axis=1)
 
     pi_triangular = np.empty((N, M_net.shape[0]))
     for n in range(N):
-        tmp1 = triang(net1, y1_intervals[n][0], y1_intervals[n][1], delta1)
-        tmp2 = triang(net2, y2_intervals[n][0], y2_intervals[n][1], delta2)
-        pi_triangular[n] = cartesian_product([tmp1, tmp2]).prod(axis=1)
+        tmp = []
+        for y_intervals_ith_dim, delta, net in zip(y_intervals, deltas, nets):
+            tmp.append(
+                triang(net, y_intervals_ith_dim[n][0], y_intervals_ith_dim[n][1], delta)
+            )
+        pi_triangular[n] = cartesian_product(tmp).prod(axis=1)
 
     pi_triangular_2 = np.empty((N, M_net.shape[0]))
     for n in range(N):
-        tmp1 = triang1(net1, y1_intervals[n][0], y1_intervals[n][1], delta1)
-        tmp2 = triang1(net2, y2_intervals[n][0], y2_intervals[n][1], delta2)
-        pi_triangular_2[n] = cartesian_product([tmp1, tmp2]).prod(axis=1)
+        tmp = []
+        for y_intervals_ith_dim, delta, net in zip(y_intervals, deltas, nets):
+            tmp.append(
+                triang1(net, y_intervals_ith_dim[n][0], y_intervals_ith_dim[n][1], delta)
+            )
+
+        pi_triangular_2[n] = cartesian_product(tmp).prod(axis=1)
 
     pi_arcsine = np.zeros((N, M_net.shape[0]))
     for n in range(N):
-        tmp1 = arcsine_dist_pdf(net1, y1_intervals[n][0], y1_intervals[n][1], delta1)
-        tmp2 = arcsine_dist_pdf(net2, y2_intervals[n][0], y2_intervals[n][1], delta2)
-        pi_arcsine[n] = cartesian_product([tmp1, tmp2]).prod(axis=1)
+        tmp = []
+        for y_intervals_ith_dim, delta, net in zip(y_intervals, deltas, nets):
+            tmp.append(
+                arcsine_dist_pdf(net, y_intervals_ith_dim[n][0], y_intervals_ith_dim[n][1], delta)
+            )
+
+        pi_arcsine[n] = cartesian_product(tmp).prod(axis=1)
 
     #средние y
     y_means_uniform = np.array(
         [
-            [(y1_intervals[n][1] + y1_intervals[n][0])/2 for n in range(N)],
-            [(y2_intervals[n][1] + y2_intervals[n][0])/2 for n in range(N)]
+            [(y_intervals_ith_dim[n][1] + y_intervals_ith_dim[n][0])/2 for n in range(N)]\
+            for y_intervals_ith_dim in y_intervals
         ]
     )
 
@@ -116,10 +134,8 @@ def get_distributions(N, M_net, net1, net2, y1_intervals, y2_intervals, delta1, 
 
     y_means_3point = y_means_uniform.copy()
 
-    y_means_2point = y_means_uniform.copy()
-
-    return pi_uniform, pi_3point, pi_triangular_2, pi_arcsine, y_means_uniform,\
-        y_means_arcsine, y_means_triang, y_means_3point, y_means_2point
+    return pi_uniform, pi_3point, pi_triangular_2, pi_arcsine,\
+        y_means_uniform, y_means_arcsine, y_means_triang, y_means_3point
 
 @njit()
 def get_index(eta, t_net, t_net0):
@@ -138,7 +154,6 @@ def get_moments(S, G, i, t_net, smjp_pos, smjp_jumps):
     # собираю все скачки на (t_net[i-1], t_net[i]]
     while (smjp_pos < smjp_jumps.shape[0]) and (t_net[i] > smjp_jumps[smjp_pos]):
         #тут smjp_jumps[-1] == T, поэтому t_net[-1] всегда <= smjp_jumps[-1]
-        #TODO сделать нормально
         dt = (smjp_jumps[smjp_pos] - prev_t)
 
         mean += G[smjp_pos] * dt

@@ -16,9 +16,14 @@ theta, y, t = sparse_mc(p0, Lambda, lam, T, get_y_uniform)
 dxi = make_discretized_xi(t_net_filtering, g, sigma, theta, y, t)
 deta = make_discretized_eta(t_net_filtering, h, theta, y, t)
 
+tmp = np.stack([sigma(-1, M_net, -1)**2, h(-1, M_net, -1)], axis=-1)
+F = np.repeat(tmp[np.newaxis, ...], N, axis=0)
+tmp = np.stack([g(-1, M_net, -1), h(-1, M_net, -1)], axis=-1)
+G = np.repeat(tmp[np.newaxis, ...], N, axis=0)
+
 filter = Filter(
     p0[:, np.newaxis] * pi_uniform, 
-    pi_uniform, M_net, g, sigma, h,
+    pi_uniform, M_net, F, G,
     N, Lambda, ht, delta
 )
 
@@ -37,10 +42,8 @@ for i, obs in enumerate(np.stack([dxi[1:], deta[1:]], axis=-1), start=1):
     theta_est.append(est[0])
     y_est.append(est[1])
 
-
 theta_est = np.array(theta_est)
 y_est = np.array(y_est)
-
 
 
 exp_path = f'saved_path_{exp_id}'

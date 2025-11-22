@@ -33,7 +33,7 @@ def plot_theta(theta, t, theta_opt):
             lw=1.5
         )
 
-        line4, = ax[n].plot(t_net_filtering, theta_opt.T[n],
+        line4, = ax[n].plot(t_net_filtering[:theta_opt.shape[0]], theta_opt[:, n],
                             color='red', lw=1)
 
         ax[n].set(
@@ -86,7 +86,7 @@ def plot_y(theta, y, t, y_opt):
             where='pre', lw=3, color='white'
         )
         line4, = ax[m].plot(
-            t_net_filtering, y_opt[:, m],
+            t_net_filtering[:y_opt.shape[0]], y_opt[:, m],
             color='red', lw=1.2
         )
 

@@ -11,7 +11,7 @@ np.random.seed(seed)
 
 @njit(fastmath=True, nogil=True, cache=True)
 def h(t, y, theta):
-    return (y[:, 1] / y[:, 0])
+    return (y[:, 1] / y[:, 0]) * 1000
 
 @njit(nogil=True, cache=True)
 def g(t, y, theta):
@@ -43,7 +43,7 @@ N = Lambda.shape[0]
 #правая граница временного промежутка
 T = 100
 
-ht = 1e-1 #шаг фильтрации
+ht = 1e-2 #шаг фильтрации
 ht10 = np.sqrt(ht)
 #сетка
 t_net_filtering = np.array([t*ht for t in range(ceil(T/ht))])
@@ -63,6 +63,9 @@ y2_intervals = np.array([[0.001, 0.03],
                          [0.04,  0.08],
                          [0.06,  0.10]])
 
+y_intervals = [y1_intervals, y2_intervals]
+
+
 #параметры сетки
 num1 = 25 #число узлов
 a1 = np.min(y1_intervals)
@@ -74,7 +77,9 @@ num2 = 100
 a2 = np.min(y2_intervals)
 b2 = np.max(y2_intervals)
 net2 = np.linspace(a2, b2, num=num2)
-delta2 = (b2 - a2) / (num2 - 1) #шаг по координате
+delta2 = (b2 - a2) / (num2 - 1)
+
+deltas = [delta1, delta2]
 
 
 points3_1 = np.array([[y1_intervals[state][0],
@@ -86,7 +91,9 @@ points3_2 = np.array([[y2_intervals[state][0],
 
 p_3point = np.array([1/3, 1/3, 1/3])
 
-M_net = cartesian_product([net1, net2])
+nets = [net1, net2]
+
+M_net = cartesian_product(nets)
 
 M = 2
 
@@ -96,10 +103,9 @@ L = 1
 lam = np.diagonal(Lambda).copy()
 Lam = Lambda - np.diag(lam)
 
-delta = delta1*delta2
+delta = np.prod(deltas)
 
-
-pi_uniform, pi_3point, pi_triangular_2, pi_arcsine, y_means_uniform,\
-    y_means_arcsine, y_means_triang, y_means_3point, y_means_2point =\
-        get_distributions(N, M_net, net1, net2, y1_intervals, y2_intervals, delta1, delta2)
+pi_uniform, pi_3point, pi_triangular_2, pi_arcsine,\
+    y_means_uniform, y_means_arcsine, y_means_triang, y_means_3point =\
+        get_distributions(N, M_net, nets, y_intervals, deltas)
 
