@@ -1,5 +1,6 @@
 import numpy as np
 import pickle
+import os
 
 from config import *
 from SMJP import (
@@ -7,6 +8,8 @@ from SMJP import (
     make_discretized_xi, make_discretized_eta
 )
 from filter import Filter
+
+exp_id = '0'
 
 theta, y, t = sparse_mc(p0, Lambda, lam, T, get_y_uniform)
 
@@ -16,7 +19,7 @@ deta = make_discretized_eta(t_net_filtering, h, theta, y, t)
 filter = Filter(
     p0[:, np.newaxis] * pi_uniform, 
     pi_uniform, M_net, g, sigma, h,
-    N, Lambda, ht1, delta
+    N, Lambda, ht, delta
 )
 
 
@@ -39,14 +42,23 @@ theta_est = np.array(theta_est)
 y_est = np.array(y_est)
 
 
-with open('saved_path/theta_est.pkl', 'wb') as f:
+
+exp_path = f'saved_path_{exp_id}'
+if not os.path.exists(exp_path):
+    os.mkdir(exp_path)
+
+with open(os.path.join(exp_path, 'theta_est.pkl'), 'wb') as f:
     pickle.dump(theta_est, f)
-with open('saved_path/y_est.pkl', 'wb') as f:
+with open(os.path.join(exp_path, 'y_est.pkl'), 'wb') as f:
     pickle.dump(y_est, f)
-with open('saved_path/theta.pkl', 'wb') as f:
+with open(os.path.join(exp_path, 'theta.pkl'), 'wb') as f:
     pickle.dump(theta, f)
-with open('saved_path/y.pkl', 'wb') as f:
+with open(os.path.join(exp_path, 'y.pkl'), 'wb') as f:
     pickle.dump(y, f)
-with open('saved_path/t.pkl', 'wb') as f:
+with open(os.path.join(exp_path, 't.pkl'), 'wb') as f:
     pickle.dump(t, f)
+with open(os.path.join(exp_path, 'dxi.pkl'), 'wb') as f:
+    pickle.dump(dxi, f)
+with open(os.path.join(exp_path, 'deta.pkl'), 'wb') as f:
+    pickle.dump(deta, f)
 

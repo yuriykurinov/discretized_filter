@@ -43,7 +43,7 @@ N = Lambda.shape[0]
 #правая граница временного промежутка
 T = 100
 
-ht = 1e-2 #шаг фильтрации
+ht = 1e-1 #шаг фильтрации
 ht10 = np.sqrt(ht)
 #сетка
 t_net_filtering = np.array([t*ht for t in range(ceil(T/ht))])

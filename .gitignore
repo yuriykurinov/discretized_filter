@@ -2,6 +2,5 @@ article/
 discretized_filter_venv/
 __pycache__/
 *.png
-saved_path/
+/saved_path*
 *.out
-*.job

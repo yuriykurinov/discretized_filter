@@ -1,0 +1,4 @@
+#!/bin/bash 
+#SBATCH --cpus-per-task=64
+
+python3 single_path_for_server.py
