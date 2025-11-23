@@ -1,5 +1,6 @@
 import numpy as np
 from numba import njit
+import pickle
 
 @njit()
 def set_seed(seed):
@@ -166,3 +167,22 @@ def get_moments(S, G, i, t_net, smjp_pos, smjp_jumps):
     var += S[smjp_pos] * dt
     
     return mean, var, smjp_pos
+
+
+def load_saved_path(exp_id):
+    with open(f'saved_path/t_{exp_id}.pkl', 'rb') as f:
+        t = pickle.load(f)
+    with open(f'saved_path/theta_{exp_id}.pkl', 'rb') as f:
+        theta = pickle.load(f)
+    with open(f'saved_path/y_{exp_id}.pkl', 'rb') as f:
+        y = pickle.load(f)
+    with open(f'saved_path/theta_est_{exp_id}.pkl', 'rb') as f:
+        theta_est = pickle.load(f)
+    with open(f'saved_path/y_est_{exp_id}.pkl', 'rb') as f:
+        y_est = pickle.load(f) 
+    with open(f'saved_path/dxi_{exp_id}.pkl', 'rb') as f:
+        dxi = pickle.load(f)
+    with open(f'saved_path/deta_{exp_id}.pkl', 'rb') as f:
+        deta = pickle.load(f) 
+    return theta, y, t, theta_est, y_est, dxi, deta
+    
