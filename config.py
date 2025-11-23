@@ -11,7 +11,7 @@ np.random.seed(seed)
 
 @njit(fastmath=True, nogil=True, cache=True)
 def h(t, y, theta):
-    return (y[:, 1] / y[:, 0]) * 1000
+    return (y[:, 1] / y[:, 0])
 
 @njit(nogil=True, cache=True)
 def g(t, y, theta):
@@ -43,8 +43,8 @@ N = Lambda.shape[0]
 #правая граница временного промежутка
 T = 100
 
-ht = 1e-2 #шаг фильтрации
-ht10 = np.sqrt(ht)
+ht = 1e-1 #шаг фильтрации
+ht0 = np.sqrt(ht)
 #сетка
 t_net_filtering = np.array([t*ht for t in range(ceil(T/ht))])
 
@@ -58,10 +58,10 @@ y1_intervals = np.array([[0.02,  0.030],
                          [0.035, 0.045],
                          [0.042, 0.070]])
 
-y2_intervals = np.array([[0.001, 0.03],
-                         [0.01,  0.05],
-                         [0.04,  0.08],
-                         [0.06,  0.10]])
+y2_intervals = np.array([[0.001, 0.02],
+                         [0.02,  0.045],
+                         [0.045,  0.07],
+                         [0.07,  0.10]]) * 10000
 
 y_intervals = [y1_intervals, y2_intervals]
 

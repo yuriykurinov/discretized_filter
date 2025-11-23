@@ -42,8 +42,8 @@ def integrand(tau, m, y, n, v, obs, pi, F, G, Lambda, ht):
             * np.prod(
                 norm(
                     obs,
-                    tau * F[n, v] + (ht - tau) * F[m, y],
-                    tau * G[n, v] + (ht - tau) * G[m, y],
+                    tau * F[m, y] + (ht - tau) * F[n, v],
+                    tau * G[m, y] + (ht - tau) * G[n, v],
                 )
             )
             * (1 - np.exp(tau / Lambda[n, n]))
