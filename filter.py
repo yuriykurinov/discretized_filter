@@ -42,8 +42,8 @@ def integrand(tau, m, y, n, v, obs, pi, F, G, Lambda, ht):
             * np.prod(
                 norm(
                     obs,
-                    tau * F[m, y] + (ht - tau) * F[n, v],
-                    tau * G[m, y] + (ht - tau) * G[n, v],
+                    tau * F[n, v] + (ht - tau) * F[m, y],
+                    tau * G[n, v] + (ht - tau) * G[m, y],
                 )
             )
             * (1 - np.exp(tau / Lambda[n, n]))
@@ -63,7 +63,6 @@ def integrand(tau, m, y, n, v, obs, pi, F, G, Lambda, ht):
     fastmath=True,
 )
 def single_jump_kernel(m, y, n, v, obs, ht, F, G, Lambda, pi, method, n_points):
-    #(m, y) -> (n, v)
     res = 0.0
     step = ht / n_points
     tau = 0.0

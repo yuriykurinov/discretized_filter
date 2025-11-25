@@ -15,9 +15,9 @@ theta, y, t = sparse_mc(p0, Lambda, lam, T, get_y_uniform, y_intervals)
 dxi = make_discretized_xi(t_net_filtering, g, sigma, theta, y, t)
 deta = make_discretized_eta(t_net_filtering, h, theta, y, t)
 
-tmp = np.stack([sigma(-1, M_net, -1)**2, h(-1, M_net, -1)], axis=-1)
-F = np.repeat(tmp[np.newaxis, ...], N, axis=0)
 tmp = np.stack([g(-1, M_net, -1), h(-1, M_net, -1)], axis=-1)
+F = np.repeat(tmp[np.newaxis, ...], N, axis=0)
+tmp = np.stack([sigma(-1, M_net, -1)**2, h(-1, M_net, -1)], axis=-1)
 G = np.repeat(tmp[np.newaxis, ...], N, axis=0)
 
 filter = Filter(
