@@ -1,6 +1,5 @@
 import numpy as np
 from numba import jit, njit#, prange
-from math import ceil
 
 from config import *
 from utils import get_moments
@@ -44,21 +43,21 @@ def get_y_triangular_2(state, y_intervals):
     return res
 
 ###########
-@njit(fastmath=True)
-def get_y_3point(state):
-    return [choice(points3_1[state], p_3point),
-            choice(points3_2[state], p_3point)]
+# @njit(fastmath=True)
+# def get_y_3point(state):
+#     return [choice(points3_1[state], p_3point),
+#             choice(points3_2[state], p_3point)]
 
-@njit(fastmath=True)
-def arcsine_dist_standard():
-    return (np.sin(np.random.uniform(0, 2*np.pi)) + 1)/2
-@njit(fastmath=True)
-def arcsine_dist(a, b):
-    return arcsine_dist_standard() * (b-a) + a
-@njit(fastmath=True)
-def get_y_arcsine(state):
-     return [arcsine_dist(y1_intervals[state][0], y1_intervals[state][1]),
-             arcsine_dist(y2_intervals[state][0], y2_intervals[state][1])]
+# @njit(fastmath=True)
+# def arcsine_dist_standard():
+#     return (np.sin(np.random.uniform(0, 2*np.pi)) + 1)/2
+# @njit(fastmath=True)
+# def arcsine_dist(a, b):
+#     return arcsine_dist_standard() * (b-a) + a
+# @njit(fastmath=True)
+# def get_y_arcsine(state):
+#      return [arcsine_dist(y1_intervals[state][0], y1_intervals[state][1]),
+#              arcsine_dist(y2_intervals[state][0], y2_intervals[state][1])]
 ###########
 
 @jit(nopython=True, fastmath=True)

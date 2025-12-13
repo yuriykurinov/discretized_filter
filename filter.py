@@ -65,12 +65,11 @@ def integrand(tau, m, y, n, v, obs, pi, F, G, Lambda, ht):
 def single_jump_kernel(m, y, n, v, obs, ht, F, G, Lambda, pi, method, n_points):
     res = 0.0
     step = ht / n_points
-    tau = 0.0
 
     if method == 0:  # mid rectangular
         tau = step / 2
     elif method == 1:  # left rectangular
-        tau = 0
+        tau = 0.0
     elif method == 2:  # right rectangular
         tau = step
 
