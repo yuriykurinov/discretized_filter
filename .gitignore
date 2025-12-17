@@ -4,4 +4,6 @@ __pycache__/
 *.png
 /saved_path*
 *.out
+*.log
 /.ipynb_checkpoints
+
