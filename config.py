@@ -4,7 +4,7 @@ from math import ceil
 from utils import set_seed, cartesian_product, get_distributions
 from SMJP import make_discretized_xi, make_discretized_eta
 
-exp_id = '123_321'
+exp_id = 'exmple_for_ia'
 
 seed = 123
 
@@ -20,12 +20,12 @@ def h(t, y, theta):
 
 @njit(nogil=True, cache=True)
 def g(t, y, theta):
-    return y[:, 0]
+    return np.vstack([y[:, 0], y[:, 1] / y[:, 0]])
 
 sigma_obs = 0.01#0.0005
 @njit(nogil=True, cache=True)
 def sigma(t, y, theta, b=sigma_obs):
-    return b*y[:, 0]
+    return np.vstack(b*y[:, 0], np.sqrt(y[:, 1] / y[:, 0]))
 
 
 Lambda = np.array(

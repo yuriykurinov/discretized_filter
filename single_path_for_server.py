@@ -1,17 +1,19 @@
 import numpy as np
+from time import time
 
 from config import *
 from utils import save_path
 from SMJP import (
     sparse_mc, get_y_uniform, 
+    make_discretized_xi, make_discretized_eta
 )
 from filter import Filter
 
-exp_id = 'non_intersecting_intervals'
-
 theta, y, t = sparse_mc(p0, Lambda, lam, T, get_y_uniform, y_intervals)
 
-observations = get_obs(t_net_filtering, theta, y, t)
+dxi = make_discretized_xi(t_net_filtering, g, sigma, theta, y, t)
+deta = make_discretized_eta(t_net_filtering, h, theta, y, t)
+
 
 filter = Filter(
     p0[:, np.newaxis] * pi_uniform, 
@@ -25,7 +27,9 @@ theta_est = [est[0]]
 y_est = [est[1]]
 
 
-for i, obs in enumerate(observations, start=1):
+start = time()
+
+for i, obs in enumerate(np.stack([dxi[1:], deta[1:]], axis=-1), start=1):
     filter.update(obs)
     est = filter.estimate()
     if np.any(np.isnan(est[0])) or np.any(np.isnan(est[1])):
@@ -34,7 +38,16 @@ for i, obs in enumerate(observations, start=1):
     theta_est.append(est[0])
     y_est.append(est[1])
 
+end = time()
+
+
+execution_time = end - start
+hours = int(execution_time // 3600)
+minutes = int((execution_time % 3600) // 60)
+print(f"execution time: {hours}h {minutes}m")
+print(f"exp_id: {exp_id}")
+
 theta_est = np.array(theta_est)
 y_est = np.array(y_est)
 
-save_path(exp_id, theta, y, t, theta_est, y_est, observations)
+save_path(exp_id, theta, y, t, theta_est, y_est, dxi, deta)
