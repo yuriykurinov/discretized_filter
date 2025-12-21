@@ -1,10 +1,11 @@
 import numpy as np
+import numba as nb
 from numba import njit
 from math import ceil
 from utils import set_seed, cartesian_product, get_distributions
 from SMJP import make_discretized_xi, make_discretized_eta
 
-exp_id = '123_321'
+exp_id = 'exmple_for_ia'
 
 seed = 123
 
@@ -18,14 +19,23 @@ set_seed(seed)
 def h(t, y, theta):
     return (y[:, 1] / y[:, 0])
 
-@njit(nogil=True, cache=True)
+
+@njit(
+    # nb.float64[:, :](
+    #     nb.float64,
+    #     nb.float64[:, :],
+    #     nb.float64
+    # ),
+    nogil=True, 
+    cache=True
+)
 def g(t, y, theta):
-    return y[:, 0]
+    return np.vstack((y[:, 0], y[:, 1] / y[:, 0]))
 
 sigma_obs = 0.01#0.0005
 @njit(nogil=True, cache=True)
 def sigma(t, y, theta, b=sigma_obs):
-    return b*y[:, 0]
+    return np.vstack((b*y[:, 0], np.sqrt(y[:, 1] / y[:, 0])))
 
 
 Lambda = np.array(
@@ -57,28 +67,28 @@ y1_intervals = np.array([[0.02,  0.0285],
                          [0.036, 0.0435],
                          [0.0435, 0.070]])
 
-# y2_intervals = np.array([[0.001, 0.02],
-#                          [0.02,  0.045],
-#                          [0.045,  0.07],
-#                          [0.07,  0.10]])
+y2_intervals = np.array([[0.001, 0.02],
+                         [0.02,  0.045],
+                         [0.045,  0.07],
+                         [0.07,  0.10]])
 
-y_intervals = [y1_intervals, ]
+y_intervals = [y1_intervals, y2_intervals]
 
 
 #параметры сетки
-num1 = 200 #число узлов
+num1 = 20 #число узлов
 a1 = np.min(y1_intervals)
 b1 = np.max(y1_intervals)
 net1 = np.linspace(a1, b1, num=num1)
 delta1 = (b1 - a1) / (num1 - 1) #шаг по координате
 
-# num2 = 100
-# a2 = np.min(y2_intervals)
-# b2 = np.max(y2_intervals)
-# net2 = np.linspace(a2, b2, num=num2)
-# delta2 = (b2 - a2) / (num2 - 1)
+num2 = 100
+a2 = np.min(y2_intervals)
+b2 = np.max(y2_intervals)
+net2 = np.linspace(a2, b2, num=num2)
+delta2 = (b2 - a2) / (num2 - 1)
 
-deltas = [delta1, ]
+deltas = [delta1, delta2]
 delta = np.prod(deltas)
 
 
@@ -91,14 +101,14 @@ points3_1 = np.array([[y1_intervals[state][0],
 
 p_3point = np.array([1/3, 1/3, 1/3])
 
-nets = [net1, ]
+nets = [net1, net2]
 
 M_net = cartesian_product(nets)
 
-M = 1
+M = 2
 
 R = 1
-L = 0
+L = 1
 
 lam = np.diagonal(Lambda).copy()
 Lam = Lambda - np.diag(lam)
