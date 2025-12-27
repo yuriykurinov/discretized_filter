@@ -21,21 +21,21 @@ def h(t, y, theta):
 
 
 @njit(
-    # nb.float64[:, :](
-    #     nb.float64,
-    #     nb.float64[:, :],
-    #     nb.float64
-    # ),
+    nb.float64[:, :](
+        nb.float64,
+        nb.float64[:, :],
+        nb.float64
+    ),
     nogil=True, 
     cache=True
 )
 def g(t, y, theta):
-    return np.vstack((y[:, 0], y[:, 1] / y[:, 0]))
+    return np.stack((y[:, 0], y[:, 1] / y[:, 0]), axis=-1)
 
 sigma_obs = 0.01#0.0005
 @njit(nogil=True, cache=True)
 def sigma(t, y, theta, b=sigma_obs):
-    return np.vstack((b*y[:, 0], np.sqrt(y[:, 1] / y[:, 0])))
+    return np.stack((b*y[:, 0], np.sqrt(y[:, 1] / y[:, 0])), axis=-1)
 
 
 Lambda = np.array(
@@ -107,8 +107,8 @@ M_net = cartesian_product(nets)
 
 M = 2
 
-R = 1
-L = 1
+R = 2
+L = 0
 
 lam = np.diagonal(Lambda).copy()
 Lam = Lambda - np.diag(lam)
@@ -118,9 +118,9 @@ pi_uniform, pi_3point, pi_triangular_2, pi_arcsine,\
     y_means_uniform, y_means_arcsine, y_means_triang, y_means_3point =\
         get_distributions(N, M_net, nets, y_intervals, deltas)
 
-_F = np.stack([g(-1, M_net, -1), ], axis=-1)
+_F = g(-1, M_net, -1)
 F = np.repeat(_F[np.newaxis, ...], N, axis=0)
-_G = np.stack([sigma(-1, M_net, -1)**2, ], axis=-1)
+_G = sigma(-1, M_net, -1)**2
 G = np.repeat(_G[np.newaxis, ...], N, axis=0)
 
 # def get_obs(t_net_filtering, theta, y, t):
@@ -129,5 +129,5 @@ G = np.repeat(_G[np.newaxis, ...], N, axis=0)
 #     return np.stack([dxi[1:], deta[1:]], axis=-1)
 
 def get_obs(t_net_filtering, theta, y, t):
-    dxi = make_discretized_xi(t_net_filtering, g, sigma, theta, y, t)
+    dxi = make_discretized_xi(t_net_filtering, g, sigma, theta, y, t, R)
     return np.stack([dxi[1:], ], axis=-1)

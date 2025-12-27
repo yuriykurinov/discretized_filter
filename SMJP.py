@@ -97,18 +97,16 @@ def sparse_mc(p0, Lambda, lam, T, get_y, y_intervals):
     return np.array(res_theta, dtype=np.int64), np.array(res_y), np.array(res_t)
 
 @njit(nogil=True, cache=True)
-def make_discretized_xi(t_net_filtering, g, sigma, theta, Y, smjp_jumps):
-    dxi = np.empty(t_net_filtering.shape[0]) #TODO dim
+def make_discretized_xi(t_net_filtering, g, sigma, theta, Y, smjp_jumps, xi_dim):
+    dxi = np.zeros((t_net_filtering.shape[0], xi_dim))
     G = g(-1, Y, -1) #TODO theta, t
     S = sigma(-1, Y, -1)**2 #TODO theta, t
 
     smjp_pos = 0
 
-    dxi[0] = 0
-
     for i in range(1, t_net_filtering.shape[0]):
         mean, var, smjp_pos = get_moments(S, G, i, t_net_filtering, smjp_pos, smjp_jumps)
-        dxi[i] = np.random.normal(mean, np.sqrt(var))
+        dxi[i] = mean + np.sqrt(var) * np.random.normal(0, 1, size=mean.shape[0])
 
     return dxi
 

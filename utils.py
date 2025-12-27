@@ -1,4 +1,5 @@
 import numpy as np
+import numba as nb
 from numba import njit
 import pickle
 import os
@@ -148,10 +149,24 @@ def get_index(eta, t_net, t_net0):
     return np.array(index)
 
 
-@njit(fastmath=True, nogil=True)
+@njit(
+# TODO почему-то не работает, когда явно указаны типы
+    # nb.types.Tuple(
+    #     (nb.float64[:], nb.float64[:], nb.uintp)
+    # )(
+    #     nb.float64[:, :, :],
+    #     nb.float64[:, :, :],
+    #     nb.uintp,
+    #     nb.float64[:],
+    #     nb.uintp,
+    #     nb.float64[:]
+    # ),
+    fastmath=True, 
+    nogil=True
+)
 def get_moments(S, G, i, t_net, smjp_pos, smjp_jumps):
-    mean = 0
-    var = 0
+    mean = np.zeros(G.shape[1:])
+    var = np.zeros(G.shape[1:])
     prev_t = t_net[i-1]
     # собираю все скачки на (t_net[i-1], t_net[i]]
     while (smjp_pos < smjp_jumps.shape[0]) and (t_net[i] > smjp_jumps[smjp_pos]):

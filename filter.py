@@ -6,7 +6,7 @@ from utils import norm
 
 @nb.njit(
     nb.float64(
-        nb.uintp, nb.uintp, nb.float64, nb.float64[:],
+        nb.uintp, nb.uintp, nb.float64[:], nb.float64[:],
         nb.float64[:, :, :], nb.float64[:, :, :], nb.float64[:]
     ),
     fastmath=True,
@@ -14,7 +14,7 @@ from utils import norm
 )
 def zero_jump_kernel(m, y, obs, ht, F, G, lam):
     sigma_sq_2 = 2 * ht * G[m, y]
-    log_res = (ht / lam[m] - 0.5 * np.log(np.pi * sigma_sq_2))\
+    log_res = (ht * lam[m] - 0.5 * np.log(np.pi * sigma_sq_2))\
             - (ht * F[m, y] - obs)**2 / sigma_sq_2
     return np.exp(np.sum(log_res))
     # return np.exp(
@@ -37,7 +37,7 @@ def integrand(tau, m, y, n, v, obs, pi, F, G, Lambda, ht):
     else:
         return (
             pi[m, y]
-            * Lambda[n, m] / Lambda[n, n]**2
+            * Lambda[n, m] 
             * np.exp(ht * Lambda[m, m])
             * np.prod(
                 norm(
