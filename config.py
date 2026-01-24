@@ -5,7 +5,7 @@ from math import ceil
 from utils import set_seed, cartesian_product, get_distributions
 from SMJP import make_discretized_xi, make_discretized_eta
 
-exp_id = 'diffusion_approx_low_freq'
+exp_id = 'diffusion_approx_high_freq'
 
 seed = 123
 
@@ -15,7 +15,7 @@ set_seed(seed)
 
 @njit(fastmath=True, nogil=True, cache=True)
 def h(t, y, theta):
-    return (y[:, 1:2] / y[:, 0:1])
+    return 1000 * (y[:, 1:2] / y[:, 0:1])
 
 
 @njit(

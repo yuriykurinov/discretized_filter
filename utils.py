@@ -206,6 +206,33 @@ def load_saved_path(exp_id):
     #     deta = pickle.load(f) 
     return theta, y, t, theta_est, y_est, observations
     
+# Добавьте в utils.py новую функцию
+def save_config_copy(exp_id):
+    config_content = None
+    try:
+        import config
+        config_file_path = config.__file__
+        with open(config_file_path, 'r', encoding='utf-8') as f:
+            config_content = f.read()
+    except Exception as e:
+        try:
+            with open('config.py', 'r', encoding='utf-8') as f:
+                config_content = f.read()
+        except Exception:
+            print(f"Не удалось сохранить config.py: {e}")
+    
+    if config_content:
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        header = f"""# Копия конфига для эксперимента {exp_id}
+        # Сохранено: {timestamp}
+        # {'='*60}\n
+        """
+        config_save_path = os.path.join(f'saved_path_{exp_id}', 'config.py')
+        with open(config_save_path, 'w', encoding='utf-8') as f:
+            f.write(header + config_content)
+
 def save_path(exp_id, theta, y, t, theta_est, y_est, observations):
     exp_path = f'saved_path_{exp_id}'
     if not os.path.exists(exp_path):
@@ -223,24 +250,6 @@ def save_path(exp_id, theta, y, t, theta_est, y_est, observations):
         pickle.dump(t, f)
     with open(os.path.join(exp_path, 'observations.pkl'), 'wb') as f:
         pickle.dump(observations, f)
-    
-    config_content = None
-    try:
-        import config
-        config_file_path = config.__file__
-        with open(config_file_path, 'r', encoding='utf-8') as f:
-            config_content = f.read()
-    except Exception as e:
-        try:
-            with open('config.py', 'r', encoding='utf-8') as f:
-                config_content = f.read()
-        except Exception:
-            print(f"Не удалось сохранить config.py: {e}")
-    
-    if config_content:
-        config_save_path = os.path.join(exp_path, 'config.py')
-        with open(config_save_path, 'w', encoding='utf-8') as f:
-            f.write(config_content)
     
     print(f"saved to {exp_path}")
 

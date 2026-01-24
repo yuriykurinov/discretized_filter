@@ -2,12 +2,14 @@ import numpy as np
 from time import time
 
 from config import *
-from utils import save_path
+from utils import save_path, save_config_copy
 from SMJP import (
     sparse_mc, get_y_uniform, 
     make_discretized_xi, make_discretized_eta
 )
 from filter import Filter
+
+save_config_copy(exp_id)
 
 theta, y, t = sparse_mc(p0, Lambda, lam, T, get_y_uniform, y_intervals)
 
