@@ -15,10 +15,14 @@ def plot_theta_background(ax, theta, t, theta_labels, theta_colors, T, alpha=0.3
     start[0] = 0
     lines = []
     for n in range(N):
-        line = ax.fill_between(np.sort(np.concatenate([start, t])), 0, T,
-                               where=np.repeat((theta==n), 2),
-                               color=theta_colors[n],
-                               alpha=alpha, transform=ax.get_xaxis_transform())
+        line = ax.fill_between(
+            np.sort(np.concatenate([start, t])), 0, T,
+            where=np.repeat((theta==n), 2),
+            label=theta_labels[n],
+            color=theta_colors[n],
+            alpha=alpha, 
+            transform=ax.get_xaxis_transform()
+        )
         lines.append(line)
     return lines
 

@@ -198,11 +198,13 @@ def load_saved_path(exp_id):
         theta_est = pickle.load(f)
     with open(os.path.join(exp_path, 'y_est.pkl'), 'rb') as f:
         y_est = pickle.load(f) 
-    with open(os.path.join(exp_path, 'dxi.pkl'), 'rb') as f:
-        dxi = pickle.load(f)
-    with open(os.path.join(exp_path, 'deta.pkl'), 'rb') as f:
-        deta = pickle.load(f) 
-    return theta, y, t, theta_est, y_est, dxi, deta
+    with open(os.path.join(exp_path, 'observations.pkl'), 'rb') as f:
+        observations = pickle.load(f) 
+    # with open(os.path.join(exp_path, 'dxi.pkl'), 'rb') as f:
+    #     dxi = pickle.load(f)
+    # with open(os.path.join(exp_path, 'deta.pkl'), 'rb') as f:
+    #     deta = pickle.load(f) 
+    return theta, y, t, theta_est, y_est, observations
     
 def save_path(exp_id, theta, y, t, theta_est, y_est, observations):
     exp_path = f'saved_path_{exp_id}'

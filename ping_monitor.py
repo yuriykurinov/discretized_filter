@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from datetime import datetime
+import os
 
 class PingMonitor:
     def __init__(self, target="8.8.8.8", duration=10):
@@ -212,7 +213,7 @@ class PingMonitor:
                 'lost_packets': len(lost_packets)
             }
     
-    def save_all_data(self, filename=None, format='json'):
+    def save_all_data(self, filename=None, format='json', folder='ping_data'):
         """Сохраняет все данные"""
         with self.lock:
             if not self.packets:
@@ -221,7 +222,7 @@ class PingMonitor:
             
             if filename is None:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"ping_data_{self.target}_{timestamp}"
+                filename = os.path.join(folder, f"ping_data_{self.target}_{timestamp}")
             
             try:
                 if format == 'json':
@@ -290,7 +291,7 @@ class PingMonitor:
                     row = [packet.get(header, '') for header in headers]
                     writer.writerow(row)
     
-    def save_times_only(self, filename=None):
+    def save_times_only(self, filename=None, folder='ping_data'):
         """Сохраняет только времена (для обратной совместимости)"""
         with self.lock:
             successful_times = [p['time'] for p in self.packets if p.get('status') == 'success']
@@ -300,8 +301,8 @@ class PingMonitor:
                 return None
             
             if filename is None:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"ping_times_{self.target}_{timestamp}.log"
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+                filename = os.path.join(folder, f"ping_times_{self.target}_{timestamp}.log")
             
             try:
                 with open(filename, 'w') as f:

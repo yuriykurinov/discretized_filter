@@ -110,7 +110,7 @@ def make_discretized_xi(t_net_filtering, g, sigma, theta, Y, smjp_jumps, xi_dim)
 
     return dxi
 
-@njit(nogil=True, cache=True)
+# @njit(nogil=True, cache=True) 
 def make_discretized_eta(t_net_filtering, h, theta, Y, smjp_jumps):
     deta = np.empty(t_net_filtering.shape[0])
     H = h(-1, Y, -1)
@@ -121,6 +121,6 @@ def make_discretized_eta(t_net_filtering, h, theta, Y, smjp_jumps):
 
     for i in range(1, t_net_filtering.shape[0]):
         mean, var, smjp_pos = get_moments(H, H, i, t_net_filtering, smjp_pos, smjp_jumps)
-        deta[i] = np.random.poisson(mean)
+        deta[i] = np.random.poisson(mean) 
 
     return deta
