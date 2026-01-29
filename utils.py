@@ -209,6 +209,10 @@ def load_saved_path(exp_id):
 # Добавьте в utils.py новую функцию
 def save_config_copy(exp_id):
     config_content = None
+    exp_path = f'saved_path_{exp_id}'
+    if not os.path.exists(exp_path):
+        os.mkdir(exp_path)
+
     try:
         import config
         config_file_path = config.__file__
@@ -225,11 +229,8 @@ def save_config_copy(exp_id):
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        header = f"""# Копия конфига для эксперимента {exp_id}
-        # Сохранено: {timestamp}
-        # {'='*60}\n
-        """
-        config_save_path = os.path.join(f'saved_path_{exp_id}', 'config.py')
+        header = f"""# Копия конфига для эксперимента {exp_id}\n# Сохранено: {timestamp}\n# {'='*60}\n"""
+        config_save_path = os.path.join(exp_path, 'config.py')
         with open(config_save_path, 'w', encoding='utf-8') as f:
             f.write(header + config_content)
 

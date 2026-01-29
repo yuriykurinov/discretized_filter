@@ -31,7 +31,7 @@ y_est = [est[1]]
 start = time()
 
 for i, obs in enumerate(observations, start=1):
-    filter.update(obs.squeeze())
+    filter.update(np.array([obs]))
     est = filter.estimate()
     if np.any(np.isnan(est[0])) or np.any(np.isnan(est[1])):
         print(f'nan on {i}-th iter')
