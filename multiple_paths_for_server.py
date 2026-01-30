@@ -2,7 +2,7 @@ import numpy as np
 from time import time
 
 from config import *
-from utils import save_path, save_config_copy
+from utils import save_path, save_config_copy, to_discrete
 from SMJP import (
     sparse_mc, get_y_uniform, 
     make_discretized_xi, make_discretized_eta
@@ -11,9 +11,10 @@ from filter import Filter
 
 save_config_copy(exp_id)
 
-paths = []
+N_paths = 10
 
-N_paths = 10_000
+res_theta = np.zeros((t_net_filtering.shape[0], N))
+res_y = np.zeros((t_net_filtering.shape[0], M))
 
 start = time()
 
@@ -42,25 +43,25 @@ for _ in range(N_paths):
             break
         theta_est.append(est[0])
         y_est.append(est[1])
-    
-    paths.append(
-        (theta, y, t, observations, np.array(theta_est), np.array(y_est))
-    )
 
+    dtheta = to_discrete(np.vstack([np.int64(theta == i) for i in range(N)]).T, t, T, ht)
+    res_theta += (dtheta - theta_est) ** 2 / N_paths
+    dY = to_discrete(y, t, T, ht)
+    res_y += (dY - y_est) ** 2 / N_paths
+    
 end = time()
 
-# theta_est = np.array(theta_est)
-# y_est = np.array(y_est)
-
-#save_path(exp_id, theta, y, t, theta_est, y_est, observations)
 
 import os, pickle
 exp_path = f'saved_path_{exp_id}/rmse_{N_paths}_paths'
 if not os.path.exists(exp_path):
     os.mkdir(exp_path)
 
-with open(exp_path + "/paths.pkl", "wb") as f:
-    pickle.dump(paths, f)
+with open(exp_path + "/res_theta.pkl", "wb") as f:
+    pickle.dump(res_theta, f)
+
+with open(exp_path + "/res_y.pkl", "wb") as f:
+    pickle.dump(res_y, f)
 
 execution_time = end - start
 hours = int(execution_time // 3600)

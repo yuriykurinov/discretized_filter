@@ -148,6 +148,21 @@ def get_index(eta, t_net, t_net0):
         index.append(eta_flag and not (t_net[t] in t_net0))
     return np.array(index)
 
+def to_discrete(jumps, time, T, h):
+    #переводит кусочно-постоянное представление в дискретное
+    from math import ceil
+    res = np.empty((ceil(T/h),) + np.shape(jumps[0]), dtype=jumps.dtype)
+    j = 0
+    i = 0
+    for s in time:
+        for k in range(j, ceil(s/h)):
+            res[k] = jumps[i]
+        j = k + 1
+        i += 1
+    for k in range(j, ceil(T/h)):
+        res[k] = jumps[-1]
+    return res
+
 
 @njit(
 # TODO почему-то не работает, когда явно указаны типы
