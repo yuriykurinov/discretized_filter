@@ -5,7 +5,7 @@ from math import ceil
 from utils import set_seed, cartesian_product, get_distributions
 from SMJP import make_discretized_xi, make_discretized_eta
 
-exp_id = 'example_for_arc_v2'
+exp_id = 'example_for_arc_v7'
 
 seed = 123
 
@@ -52,7 +52,7 @@ N = Lambda.shape[0]
 #правая граница временного промежутка
 T = 100
 
-ht = 0.1 #шаг фильтрации
+ht = 0.5 #шаг фильтрации
 ht10 = np.sqrt(ht)
 #сетка
 t_net_filtering = np.array([t*ht for t in range(ceil(T/ht))])
@@ -63,7 +63,7 @@ p0 /= np.sum(p0)
 
 #интервалы для Y
 y1_intervals = np.array([[1, 2],
-                         [2, 3]])
+                         [1001, 1002]])
 
 # y2_intervals = np.array([[0.001, 0.03],
 #                          [0.01,  0.05],
@@ -74,11 +74,10 @@ y_intervals = [y1_intervals, ]
 
 
 #параметры сетки
-num1 = 401 #число узлов
-a1 = np.min(y1_intervals)
-b1 = np.max(y1_intervals)
-net1 = np.linspace(a1, b1, num=num1)
-delta1 = (b1 - a1) / (num1 - 1) #шаг по координате
+num1 = 101 #число узлов
+
+# TODO normalno
+delta1 = (y1_intervals[0, 1] - y1_intervals[0, 0]) / (num1 - 1) #шаг по координате
 
 # num2 = 100
 # a2 = np.min(y2_intervals)
@@ -88,6 +87,7 @@ delta1 = (b1 - a1) / (num1 - 1) #шаг по координате
 
 deltas = [delta1, ]
 
+n_points = 2 # time integration
 
 points3_1 = np.array([[y1_intervals[state][0],
                     (y1_intervals[state][0] + y1_intervals[state][1])/2,
@@ -98,9 +98,11 @@ points3_1 = np.array([[y1_intervals[state][0],
 
 p_3point = np.array([1/3, 1/3, 1/3])
 
-nets = [net1, ]
+nets = [
+    [np.linspace(y1_intervals[n, 0], y1_intervals[n, 1], num=num1), ] for n in range(N)
+]
 
-M_net = cartesian_product(nets)
+M_net = np.array([cartesian_product(net) for net in nets])
 
 M = 1
 
@@ -111,6 +113,7 @@ lam = np.diagonal(Lambda).copy()
 Lam = Lambda - np.diag(lam)
 
 delta = np.prod(deltas)
+# TODO deltas[n]
 
 pi_uniform, pi_3point, pi_triangular_2, pi_arcsine,\
     y_means_uniform, y_means_arcsine, y_means_triang, y_means_3point =\
@@ -121,11 +124,8 @@ pi_uniform, pi_3point, pi_triangular_2, pi_arcsine,\
 # _G = sigma(-1, M_net, -1)**2
 # G = np.repeat(_G[np.newaxis, ...], N, axis=0)
 
-_F  = np.stack([g(-1, M_net, -1), ], axis=-1).squeeze(axis=-1)
-F = np.repeat(_F[np.newaxis, ...], N, axis=0)
-_G = np.stack([sigma(-1, M_net, -1)**2, ], axis=-1).squeeze(axis=-1)
-G = np.repeat(_G[np.newaxis, ...], N, axis=0)
-
+F = np.array([[g(-1, M_net[n], -1), ] for n in range(N)]).squeeze(1)
+G = np.array([[sigma(-1, M_net[n], -1)**2, ] for n in range(N)]).squeeze(1)
 # def get_obs(t_net_filtering, theta, y, t):
 #     dxi = make_discretized_xi(t_net_filtering, g, sigma, theta, y, t, R)
 #     deta = make_discretized_eta(t_net_filtering, h, theta, y, t)

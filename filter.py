@@ -6,7 +6,7 @@ from utils import norm
 
 @nb.njit(
     nb.float64(
-        nb.uintp, nb.uintp, nb.float64[:], nb.float64[:],
+        nb.uintp, nb.uintp, nb.float64[:], nb.float64,
         nb.float64[:, :, :], nb.float64[:, :, :], nb.float64[:]
     ),
     fastmath=True,
@@ -129,10 +129,10 @@ class Filter(object):
         self.ht = ht
         self.N = N
         self.n_points = n_points
-        self.delta = delta
+        self.delta = delta # TODO delta[n]
         self.filter_step = filter_step
 
-        self.F = F        
+        self.F = F
         self.G = G
 
         self.psi = pi_init.copy()
@@ -153,6 +153,10 @@ class Filter(object):
     def estimate(self):
         theta_est = self.psi.sum(axis=1)
         theta_est = theta_est / theta_est.sum()
-        y_est = self.psi.sum(axis=0) @ self.M_net * self.delta
+        y_est = np.zeros(self.M_net.shape[2]) 
+        for n in range(self.N):
+            y_est += self.psi[n] @ self.M_net[n] * self.delta
+
+        #self.psi.sum(axis=0) @ self.M_net * self.delta
         return theta_est, y_est
 

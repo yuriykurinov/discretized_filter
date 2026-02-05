@@ -105,7 +105,7 @@ def make_discretized_xi(t_net_filtering, g, sigma, theta, Y, smjp_jumps, xi_dim)
     smjp_pos = 0
 
     for i in range(1, t_net_filtering.shape[0]):
-        mean, var, smjp_pos = get_moments(S, G, i, t_net_filtering, smjp_pos, smjp_jumps)
+        mean, var, smjp_pos = get_moments(G, S, i, t_net_filtering, smjp_pos, smjp_jumps)
         dxi[i] = mean + np.sqrt(var) * np.random.normal(0, 1, size=mean.shape[0])
 
     return dxi
