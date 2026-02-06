@@ -78,6 +78,77 @@ def single_jump_kernel(m, y, n, v, obs, ht, F, G, Lambda, pi, method, n_points):
         tau += step
     return res
 
+@nb.njit(
+    nb.float64(
+        nb.float64, nb.float64, 
+        nb.uintp, nb.uintp, nb.uintp, nb.uintp, nb.uintp, nb.uintp,
+        nb.float64[:], nb.float64[:, :], nb.float64[:, :, :],
+        nb.float64[:, :, :], nb.float64[:, :], nb.float64
+    ),
+    fastmath=True,
+    #inline='always',
+)
+def integrand2(tau1, tau2, m, y, k, z, n, v, obs, pi, F, G, Lambda, ht):
+    if pi[m, y] == 0:
+        return 0
+    else:
+        return (
+            pi[m, y] * pi[k, z] 
+            * Lambda[n, k] * Lambda[k, m] 
+            * np.exp(ht * Lambda[m, m])
+            * np.prod(
+                norm(
+                    obs,
+                    tau1 * F[n, v] + tau2 * F[k, z] + (ht - tau1 - tau2) * F[m, y],
+                    tau1 * G[n, v] + tau2 * G[k, z] + (ht - tau1 - tau2) * G[m, y],
+                )
+            )
+            * np.exp(tau1 * Lambda[n, n] + tau2 * Lambda[k, k] + (ht - tau1 - tau2) * Lambda[m, m])
+        )
+
+@nb.njit(
+    nb.float64(
+        nb.uintp, nb.uintp, nb.uintp, nb.uintp,
+        nb.float64[:], nb.float64,
+        nb.float64[:, :, :], nb.float64[:, :, :],
+        nb.float64[:, :], nb.float64[:, :],
+        nb.uintp, nb.uintp, nb.float64
+    ),
+    #inline='always',
+    fastmath=True,
+)
+def double_jump_kernel(m, y, n, v, obs, ht, F, G, Lambda, pi, method, n_points, delta):
+    res = 0.0
+
+    step = ht / n_points
+
+    if method == 0:  # mid rectangular
+        shift = step / 2
+    elif method == 1:  # left rectangular
+        shift = 0.0
+    elif method == 2:  # right rectangular
+        shift = step
+
+    for k in range(pi.shape[0]):
+        if (m == k) or (k == n):
+            continue
+        for z in range(pi.shape[1]):
+            for i in range(n_points):
+                for j in range(n_points-i):
+                    res += integrand2(
+                        step*i + shift,  
+                        step*j + shift, 
+                        m, y, 
+                        k, z, 
+                        n, v, 
+                        obs, 
+                        pi, 
+                        F, G, 
+                        Lambda, 
+                        ht
+                    ) * step * step * delta
+    return res
+
 
 @nb.njit(
     nb.float64[:, :](
@@ -92,11 +163,12 @@ def single_jump_kernel(m, y, n, v, obs, ht, F, G, Lambda, pi, method, n_points):
         nb.float64,
         nb.uintp,
         nb.uintp,
+        nb.bool
     ),
     fastmath=True,
     parallel=True,
 )
-def filter_step(psi, obs, F, G, Lambda, lam, pi, ht, delta, N, n_points):
+def filter_step(psi, obs, F, G, Lambda, lam, pi, ht, delta, N, n_points, two_jumps=False):
     res = np.zeros(psi.shape)
 
     for y in nb.prange(psi.shape[1]):
@@ -113,6 +185,15 @@ def filter_step(psi, obs, F, G, Lambda, lam, pi, ht, delta, N, n_points):
                             * psi[n, v]
                             * delta
                         )
+                if two_jumps:
+                    res[m, y] += (
+                        double_jump_kernel(
+                            m, y, n, v, obs, ht, F, G, Lambda, pi,
+                            0, n_points, delta  # mid-rectangular method = 0
+                        )
+                        * psi[n, v]
+                        * delta
+                    )
     return res
 
 
@@ -120,6 +201,7 @@ class Filter(object):
     def __init__(
         self, pi_init, pi, M_net, F, G,
         N, Lambda, ht, delta, n_points=3,
+        two_jumps=False,
         filter_step=filter_step
     ):
         self.pi = pi.copy()
@@ -132,6 +214,8 @@ class Filter(object):
         self.delta = delta # TODO delta[n]
         self.filter_step = filter_step
 
+        self.two_jumps = two_jumps
+
         self.F = F
         self.G = G
 
@@ -142,6 +226,7 @@ class Filter(object):
             self.psi, obs, self.F, self.G, 
             self.Lambda, self.lam, self.pi,
             self.ht, self.delta, self.N, self.n_points,
+            self.two_jumps
         )
 
         normalizer = new_psi.sum() * self.delta
