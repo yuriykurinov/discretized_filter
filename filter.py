@@ -93,7 +93,6 @@ def integrand2(tau1, tau2, m, y, k, z, n, v, obs, pi, F, G, Lambda, ht):
         return (
             pi[m, y] * pi[k, z] 
             * Lambda[n, k] * Lambda[k, m] 
-            * np.exp(ht * Lambda[m, m])
             * np.prod(
                 norm(
                     obs,
