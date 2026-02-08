@@ -183,14 +183,15 @@ def filter_step(psi, obs, F, G, Lambda, lam, pi, ht, delta, N, n_points, two_jum
                             * delta
                         )
                 if two_jumps:
-                    res[m, y] += (
-                        double_jump_kernel(
-                            m, y, n, v, obs, ht, F, G, Lambda, pi,
-                            0, n_points, delta  # mid-rectangular method = 0
+                    for v in range(psi.shape[1]):
+                        res[m, y] += (
+                            double_jump_kernel(
+                                m, y, n, v, obs, ht, F, G, Lambda, pi,
+                                0, n_points, delta  # mid-rectangular method = 0
+                            )
+                            * psi[n, v]
+                            * delta
                         )
-                        * psi[n, v]
-                        * delta
-                    )
     return res
 
 
