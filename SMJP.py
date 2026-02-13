@@ -99,8 +99,11 @@ def sparse_mc(p0, Lambda, lam, T, get_y, y_intervals):
 @njit(nogil=True, cache=True)
 def make_discretized_xi(t_net_filtering, g, sigma, theta, Y, smjp_jumps, xi_dim):
     dxi = np.zeros((t_net_filtering.shape[0], xi_dim))
-    G = g(-1, Y, -1) #TODO theta, t
-    S = sigma(-1, Y, -1)**2 #TODO theta, t
+    G = np.zeros((t_net_filtering.shape[0], xi_dim))
+    S = np.zeros((t_net_filtering.shape[0], xi_dim))
+    for t in range(G.shape[0]):
+        G[t] = g(t, Y[t:t+1], theta[t])[0] #TODO theta, t
+        S[t] = sigma(t, Y[t:t+1], theta[t])[0]**2 #TODO theta, t
 
     smjp_pos = 0
 
