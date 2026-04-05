@@ -23,9 +23,9 @@ np.random.seed(seed)
 rng = np.random.default_rng(seed=seed)
 set_seed(seed)
 
-# @njit(fastmath=True, nogil=True, cache=True)
-# def h(t, y, theta):
-#     return 1000 * (y[:, 1:2] / y[:, 0:1])
+@njit(fastmath=True, nogil=True, cache=True)
+def h(t, y, theta):
+    return (y[:, 1] / y[:, 0])
 
 
 @njit(
@@ -59,8 +59,9 @@ def sigma(t, y, theta):
 
 Lambda = np.array(
     [
-        [  0, 0.5],
-        [0.5,   0],
+        [0   ,  0.2, 0.2 ],
+        [0.01,  0  , 0.05],
+        [0.15,  0.1 , 0   ],
     ]
 )
 
