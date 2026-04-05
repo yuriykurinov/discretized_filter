@@ -11,14 +11,14 @@ from filter import Filter
 
 save_config_copy(exp_id)
 
-N_paths = 10
+N_paths = 10_000
 
 res_theta = np.zeros((t_net_filtering.shape[0], N))
 res_y = np.zeros((t_net_filtering.shape[0], M))
 
 start = time()
 
-for _ in range(N_paths):
+for path_num in range(1, N_paths+1):
     theta, y, t = sparse_mc(p0, Lambda, lam, T, get_y_uniform, y_intervals)
 
     observations = get_obs(t_net_filtering, theta, y, t).squeeze()
@@ -27,7 +27,9 @@ for _ in range(N_paths):
     filter = Filter(
         p0[:, np.newaxis] * pi_uniform, 
         pi_uniform, M_net, F, G,
-        N, Lambda, ht, delta
+        N, Lambda, ht, delta,
+        n_points=n_points,
+        two_jumps=two_jumps
     )
 
 
@@ -48,6 +50,12 @@ for _ in range(N_paths):
     res_theta += (dtheta - theta_est) ** 2 / N_paths
     dY = to_discrete(y, t, T, ht)
     res_y += (dY - y_est) ** 2 / N_paths
+
+    if path_num % (N_paths // 100)  == 0:
+        curr_time = time() - start
+        hours = int(curr_time // 3600)
+        minutes = int((curr_time % 3600) // 60)
+        print(f'path {path_num}, time: {hours}h {minutes}m', flush=True)
     
 end = time()
 
