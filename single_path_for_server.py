@@ -19,7 +19,8 @@ observations = get_obs(t_net_filtering, theta, y, t).squeeze()
 filter = Filter(
     p0[:, np.newaxis] * pi_uniform, 
     pi_uniform, M_net, F, G,
-    N, Lambda, ht, delta
+    N, Lambda, ht, delta,
+    n_points=n_points
 )
 
 
@@ -30,8 +31,11 @@ y_est = [est[1]]
 
 start = time()
 
+if len(observations.shape) == 1:
+    observations.reshape(-1, 1)
+
 for i, obs in enumerate(observations, start=1):
-    filter.update(np.array([obs]))
+    filter.update(obs)
     est = filter.estimate()
     if np.any(np.isnan(est[0])) or np.any(np.isnan(est[1])):
         print(f'nan on {i}-th iter')
