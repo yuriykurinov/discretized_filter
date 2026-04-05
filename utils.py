@@ -19,7 +19,7 @@ def cartesian_product(arrays):
 
 
 #плотности
-@njit(fastmath=True, nogil=True, cache=True)
+@njit(fastmath=True, nogil=True)
 def norm(x, mu, sigma_sq):
     return np.exp(-(x - mu)**2 / (2*sigma_sq)) / np.sqrt(2*np.pi*sigma_sq)
 @njit(fastmath=True, nogil=True, cache=True)

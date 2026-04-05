@@ -5,17 +5,19 @@ from math import ceil
 from utils import set_seed, cartesian_product, get_distributions
 from SMJP import make_discretized_xi, make_discretized_eta
 
-exp_id = 'example_for_arc_v7'
+exp_id = 'example_for_ia_6'
 
 seed = 123
+
+N = 3 # theta dim
 
 np.random.seed(seed)
 rng = np.random.default_rng(seed=seed)
 set_seed(seed)
 
-# @njit(fastmath=True, nogil=True, cache=True)
-# def h(t, y, theta):
-#     return 1000 * (y[:, 1:2] / y[:, 0:1])
+@njit(fastmath=True, nogil=True, cache=True)
+def h(t, y, theta):
+    return (y[:, 1] / y[:, 0])
 
 
 @njit(
@@ -24,36 +26,39 @@ set_seed(seed)
         nb.float64[:, :],
         nb.float64
     ),
-    nogil=True, 
-    cache=True
+
 )
 def g(t, y, theta):
-    return 0*y[:, 0:1]
+    return 0 * y[:, 0:1] #/ (1 - y[:, 0:1])
+#np.stack((y[:, 0], y[:, 1] / y[:, 0]), axis=-1)
 
-sigma_obs = 0.01#0.0005
-@njit(nogil=True, cache=True)
-def sigma(t, y, theta, b=sigma_obs):
-    return y[:, 0:1]
+@njit(
+    nb.float64[:, :](
+        nb.float64,
+        nb.float64[:, :],
+        nb.float64
+    ), 
+)
+def sigma(t, y, theta):
+    return np.sqrt(y[:, 0:1])
+#np.stack((b*y[:, 0], np.sqrt(y[:, 1] / y[:, 0])), axis=-1)
 
 
 Lambda = np.array(
     [
-        [  0, 0.5],
-        [0.5,   0],
+        [0   ,  0.2, 0.2 ],
+        [0.01,  0  , 0.05],
+        [0.15,  0.1 , 0   ],
     ]
 )
 
 for i in range(Lambda.shape[0]):
     Lambda[i][i] = -np.sum(Lambda[i])
 
-#количество состояний
-N = Lambda.shape[0]
-
 #правая граница временного промежутка
 T = 100
 
-ht = 0.5 #шаг фильтрации
-ht10 = np.sqrt(ht)
+ht = 1e-2 #шаг фильтрации
 #сетка
 t_net_filtering = np.array([t*ht for t in range(ceil(T/ht))])
 
@@ -62,13 +67,10 @@ p0 = vh[-1]
 p0 /= np.sum(p0)
 
 #интервалы для Y
-y1_intervals = np.array([[1, 2],
-                         [1001, 1002]])
+y1_intervals = np.array([[0.2, 0.2],
+                         [0.3, 0.5],
+                         [0.4, 0.6]])
 
-# y2_intervals = np.array([[0.001, 0.03],
-#                          [0.01,  0.05],
-#                          [0.04,  0.08],
-#                          [0.06,  0.10]])
 
 y_intervals = [y1_intervals, ]
 
@@ -79,24 +81,9 @@ num1 = 101 #число узлов
 # TODO normalno
 delta1 = (y1_intervals[0, 1] - y1_intervals[0, 0]) / (num1 - 1) #шаг по координате
 
-# num2 = 100
-# a2 = np.min(y2_intervals)
-# b2 = np.max(y2_intervals)
-# net2 = np.linspace(a2, b2, num=num2)
-# delta2 = (b2 - a2) / (num2 - 1)
 
 deltas = [delta1, ]
 
-n_points = 2 # time integration
-
-points3_1 = np.array([[y1_intervals[state][0],
-                    (y1_intervals[state][0] + y1_intervals[state][1])/2,
-                     y1_intervals[state][1]] for state in range(N)])
-# points3_2 = np.array([[y2_intervals[state][0],
-#                     (y2_intervals[state][0] + y2_intervals[state][1])/2,
-#                      y2_intervals[state][1]] for state in range(N)])
-
-p_3point = np.array([1/3, 1/3, 1/3])
 
 nets = [
     [np.linspace(y1_intervals[n, 0], y1_intervals[n, 1], num=num1), ] for n in range(N)
@@ -119,18 +106,8 @@ pi_uniform, pi_3point, pi_triangular_2, pi_arcsine,\
     y_means_uniform, y_means_arcsine, y_means_triang, y_means_3point =\
         get_distributions(N, M_net, nets, y_intervals, deltas)
 
-# _F = g(-1, M_net, -1)
-# F = np.repeat(_F[np.newaxis, ...], N, axis=0)
-# _G = sigma(-1, M_net, -1)**2
-# G = np.repeat(_G[np.newaxis, ...], N, axis=0)
-
 F = np.array([[g(-1, M_net[n], -1), ] for n in range(N)]).squeeze(1)
 G = np.array([[sigma(-1, M_net[n], -1)**2, ] for n in range(N)]).squeeze(1)
-# def get_obs(t_net_filtering, theta, y, t):
-#     dxi = make_discretized_xi(t_net_filtering, g, sigma, theta, y, t, R)
-#     deta = make_discretized_eta(t_net_filtering, h, theta, y, t)
-#     deta = deta.reshape(-1, 1)
-#     return np.stack([dxi[1:], deta[1:]], axis=-1)
 
 def get_obs(t_net_filtering, theta, y, t):
     dxi = make_discretized_xi(t_net_filtering, g, sigma, theta, y, t, R)
