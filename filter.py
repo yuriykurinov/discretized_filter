@@ -160,7 +160,7 @@ def double_jump_kernel(m, y, n, v, obs, ht, F, G, Lambda, pi, method, n_points, 
         nb.float64,
         nb.uintp,
         nb.uintp,
-        nb.bool
+        nb.boolean
     ),
     fastmath=True,
     parallel=True,

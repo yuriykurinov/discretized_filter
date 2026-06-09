@@ -116,7 +116,7 @@ def make_discretized_xi(t_net_filtering, g, sigma, theta, Y, smjp_jumps, xi_dim)
 # @njit(nogil=True, cache=True) 
 def make_discretized_eta(t_net_filtering, h, theta, Y, smjp_jumps):
     deta = np.empty(t_net_filtering.shape[0])
-    H = h(-1, Y, -1)
+    H = h(-1, Y, -1).squeeze()
 
     smjp_pos = 0
 
