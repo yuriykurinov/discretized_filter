@@ -14,8 +14,7 @@ n_points = 1 # time integration
 #правая граница временного промежутка
 T = 5
 
-ht = 0.5 #шаг фильтрации
-
+ht = 0.1 #шаг фильтрации
 
 seed = 321
 
@@ -58,10 +57,6 @@ Lambda = np.array(
 for i in range(Lambda.shape[0]):
     Lambda[i][i] = -np.sum(Lambda[i])
 
-#правая граница временного промежутка
-T = 10
-
-ht = 1e-1 #шаг фильтрации
 #сетка
 t_net_filtering = np.array([t*ht for t in range(ceil(T/ht))])
 
@@ -70,10 +65,10 @@ p0 = vh[-1]
 p0 /= np.sum(p0)
 
 #интервалы для Y
-y1_intervals = np.array([[0.01 , 5 + 0.01 ],
-                         [0.015, 5 + 0.05 ],
-                         [0.02 , 5 + 0.02 ],
-                         [0.022, 5 + 0.022]])
+y1_intervals = np.array([[0.01 , 0.01 + 0.01 ],
+                         [0.015, 0.01 + 0.015],
+                         [0.02 , 0.01 + 0.02 ],
+                         [0.022, 0.03 + 0.022]])
 
 y2_intervals = np.array([[0.001, 0.03 ],
                          [0.01 , 0.05 ],
@@ -84,7 +79,7 @@ y_intervals = [y1_intervals, y2_intervals]
 
 
 #параметры сетки
-num1 = 81 #число узлов
+num1 = 51 #число узлов
 
 # TODO normalno
 delta1 = (y1_intervals[0, 1] - y1_intervals[0, 0]) / (num1 - 1) #шаг по координате
@@ -92,8 +87,11 @@ delta2 = (y2_intervals[0, 1] - y2_intervals[0, 0]) / (num1 - 1)
 
 
 deltas = [delta1, delta2]
-delta = np.prod(deltas)
-
+#шаг по координате
+delta = np.array([
+    (y1_intervals[n, 1] - y1_intervals[n, 0]) / (num1 - 1) * (y2_intervals[n, 1] - y2_intervals[n, 0]) / (num1 - 1) \
+    for n in range(N)
+])
 
 points3_1 = np.array([[y1_intervals[state][0],
                     (y1_intervals[state][0] + y1_intervals[state][1])/2,

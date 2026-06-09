@@ -157,7 +157,7 @@ def double_jump_kernel(m, y, n, v, obs, ht, F, G, Lambda, pi, method, n_points, 
         nb.float64[:],
         nb.float64[:, :],
         nb.float64,
-        nb.float64,
+        nb.float64[:],
         nb.uintp,
         nb.uintp,
         nb.boolean
@@ -180,17 +180,17 @@ def filter_step(psi, obs, F, G, Lambda, lam, pi, ht, delta, N, n_points, two_jum
                                 0, n_points  # mid-rectangular method = 0
                             )
                             * psi[n, v]
-                            * delta
+                            * delta[n]
                         )
                 if two_jumps:
                     for v in range(psi.shape[1]):
                         res[m, y] += (
                             double_jump_kernel(
                                 m, y, n, v, obs, ht, F, G, Lambda, pi,
-                                0, n_points, delta  # mid-rectangular method = 0
+                                0, n_points, delta[n]  # mid-rectangular method = 0
                             )
                             * psi[n, v]
-                            * delta
+                            * delta[n]
                         )
     return res
 
@@ -209,7 +209,7 @@ class Filter(object):
         self.ht = ht
         self.N = N
         self.n_points = n_points
-        self.delta = delta # TODO delta[n]
+        self.delta = delta
         self.filter_step = filter_step
 
         self.two_jumps = two_jumps
@@ -227,18 +227,18 @@ class Filter(object):
             self.two_jumps
         )
 
-        normalizer = new_psi.sum() * self.delta
+        normalizer = (self.delta[:, np.newaxis] * new_psi).sum() 
         if normalizer != 0:
             self.psi = new_psi / normalizer
-        # else:
-        #     raise ZeroDivisionError('psi fell to zero')
+        else:
+            raise ZeroDivisionError('psi fell to zero')
     
     def estimate(self):
         theta_est = self.psi.sum(axis=1)
         theta_est = theta_est / theta_est.sum()
         y_est = np.zeros(self.M_net.shape[2]) 
         for n in range(self.N):
-            y_est += self.psi[n] @ self.M_net[n] * self.delta
+            y_est += self.psi[n] @ self.M_net[n] * self.delta[n]
 
         #self.psi.sum(axis=0) @ self.M_net * self.delta
         return theta_est, y_est
