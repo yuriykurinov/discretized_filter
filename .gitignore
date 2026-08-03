@@ -1,6 +1,7 @@
 article/
 discretized_filter_venv/
 __pycache__/
+*.egg-info/
 *.png
 /saved_path*
 *.out

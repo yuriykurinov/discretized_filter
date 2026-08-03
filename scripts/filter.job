@@ -1,0 +1,7 @@
+#!/bin/bash
+#SBATCH --cpus-per-task=64
+
+# Конфиг берётся из DFILTER_CONFIG (наследуется из окружения при sbatch)
+# либо передаётся аргументом задания: sbatch scripts/filter.job --config <имя>
+cd "${SLURM_SUBMIT_DIR:-.}"
+.venv/bin/python scripts/run_single_path.py "$@"

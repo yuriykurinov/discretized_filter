@@ -1,6 +1,5 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from config import N, T, ht, M, t_net_filtering
 from math import ceil
 
 theta_labels_default = ['$\\theta_t = e_1$', '$\\theta_t = e_2$',

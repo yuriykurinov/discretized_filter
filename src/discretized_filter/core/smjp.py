@@ -1,64 +1,14 @@
 import numpy as np
 from numba import jit, njit#, prange
 
-from config import *
-from utils import get_moments
+from discretized_filter.utils.grids import get_moments
 
 #генерация марковской цепи и наблюдений (по скачкам)
+#генераторы Y по theta (get_y_uniform, get_y_triangular, ...) перенесены
+#в discretized_filter.utils.distributions вместе с парными им плотностями
 @njit(fastmath=True)
 def choice(a, p):
     return a[np.searchsorted(np.cumsum(p), np.random.uniform())]
-
-#генерация Y по theta
-#равномерные
-@njit(fastmath=True)
-def get_y_uniform(state, y_intervals):
-    res = []
-    for y_interval in y_intervals:
-        res.append(
-            np.random.uniform(y_interval[state][0], y_interval[state][1])
-        )
-    return res
-
-@njit(fastmath=True)
-def get_y_triangular(state, y_intervals):
-    res = []
-    for y_interval in y_intervals:
-        res.append(
-            np.random.triangular(y_interval[state][0], 
-                                (y_interval[state][1] + y_interval[state][0]) / 2, 
-                                 y_interval[state][1])
-        )
-    return res
-
-@njit(fastmath=True)
-def get_y_triangular_2(state, y_intervals):
-    res = []
-    for y_interval in y_intervals:
-        res.append(
-            np.random.triangular(y_interval[state][0], 
-                                 y_interval[state][1], 
-                                 y_interval[state][1])
-        )
-    return res
-
-###########
-# @njit(fastmath=True)
-# def get_y_3point(state):
-#     return [choice(points3_1[state], p_3point),
-#             choice(points3_2[state], p_3point)]
-
-# @njit(fastmath=True)
-# def arcsine_dist_standard():
-#     return (np.sin(np.random.uniform(0, 2*np.pi)) + 1)/2
-# @njit(fastmath=True)
-# def arcsine_dist(a, b):
-#     return arcsine_dist_standard() * (b-a) + a
-# @njit(fastmath=True)
-# def get_y_arcsine(state):
-#      return [arcsine_dist(y1_intervals[state][0], y1_intervals[state][1]),
-#              arcsine_dist(y2_intervals[state][0], y2_intervals[state][1])]
-###########
 
 @jit(nopython=True, fastmath=True)
 def sparse_mc(p0, Lambda, lam, T, get_y, y_intervals):
