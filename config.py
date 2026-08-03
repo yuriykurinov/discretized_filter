@@ -12,9 +12,9 @@ two_jumps = False
 n_points = 1 # time integration
 
 #правая граница временного промежутка
-T = 5
+T = 100
 
-ht = 0.1 #шаг фильтрации
+ht = 0.01 #шаг фильтрации
 
 seed = 321
 
@@ -79,7 +79,7 @@ y_intervals = [y1_intervals, y2_intervals]
 
 
 #параметры сетки
-num1 = 51 #число узлов
+num1 = 64 #число узлов
 
 # TODO normalno
 delta1 = (y1_intervals[0, 1] - y1_intervals[0, 0]) / (num1 - 1) #шаг по координате
