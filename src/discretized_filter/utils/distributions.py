@@ -1,14 +1,8 @@
 """
 Плотности π(y|θ) и парные им джитованные генераторы Y.
 
-Каждое встроенное семейство описано объектом PiFamily: плотность на сетке
-(pdf_grid) и согласованный с ней генератор (sampler) — джитованная функция
-с той же математической моделью. Реестр (register_pi_family/get_pi_family)
-позволяет конфигу выбрать семейство по имени либо передать произвольный
-объект PiFamily («произвольная плотность»), поэтому набор имён не жёстко
-зашит нигде, кроме самой регистрации встроенных семейств.
-
-build_pi(...) — точка входа для конфига, заменяет старый get_distributions.
+Реестр семейств: register_pi_family/get_pi_family; build_pi -- точка входа
+для конфига.
 """
 import math
 from dataclasses import dataclass
@@ -26,6 +20,21 @@ from discretized_filter.utils.grids import cartesian_product
 @njit(fastmath=True, nogil=True)
 def norm(x, mu, sigma_sq):
     return np.exp(-(x - mu)**2 / (2*sigma_sq)) / np.sqrt(2*np.pi*sigma_sq)
+
+
+# ---------------------------------------------------------------------------
+# Негауссовский шум для непрерывного канала наблюдения (core/smjp.py).
+# ---------------------------------------------------------------------------
+@njit(fastmath=True, nogil=True, cache=True)
+def pareto_std(size, alpha):
+    """size стандартизованных значений Z = (Pareto(x_m=1, alpha) - m)/s."""
+    m = alpha / (alpha - 1.0)
+    s = np.sqrt(alpha / (alpha - 2.0)) / (alpha - 1.0)
+    res = np.empty(size)
+    for i in range(size):
+        p = (1.0 - np.random.random())**(-1.0 / alpha)
+        res[i] = (p - m) / s
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -68,8 +77,7 @@ def arcsine_1d(x, a, b):
 
 
 # ---------------------------------------------------------------------------
-# Генераторы Y по θ (перенесены из core/smjp.py + доведённые до конца
-# закомментированные варианты)
+# Генераторы Y по θ
 # ---------------------------------------------------------------------------
 @njit(fastmath=True)
 def get_y_uniform(state, y_intervals):
@@ -146,23 +154,10 @@ def get_y_arcsine(state, y_intervals):
 
 # ---------------------------------------------------------------------------
 # «Зависимое» распределение: y1 ~ сдвинутая гамма, y2 | y1 ~ наклонённая
-# равномерная плотность. Перенесено из config.py (gamma_d, cond_d) и
-# filtering.ipynb (get_y_dependent) — до переноса плотность и генератор
-# жили в разных файлах и, как выяснилось, не совпадали (см. отчёт).
+# равномерная плотность.
 # ---------------------------------------------------------------------------
 def _gamma_d_1d(x, alpha, beta, shift):
-    """
-    Плотность гамма-распределения Gamma(alpha, rate=beta), сдвинутого на
-    shift: X = shift + Gamma(alpha, rate=beta). math.lgamma вместо
-    scipy.special.gammaln — не тащим scipy в горячий путь.
-
-    ИСПРАВЛЕНО при переносе: в config.py `s = x[x >= shift]` не вычитал
-    shift из x, из-за чего плотность фактически была плотностью
-    НЕсдвинутой Gamma(alpha, beta), обрезанной по порогу x >= shift, — это
-    описывает совершенно другое (и для параметров конфига практически
-    нереализуемое) распределение, не совпадающее с генератором. Здесь
-    используется s = x - shift, что соответствует генератору.
-    """
+    """Плотность Gamma(alpha, rate=beta), сдвинутого на shift: X = shift + Gamma."""
     res = np.zeros_like(x)
     mask = x >= shift
     s = x[mask] - shift
@@ -180,11 +175,7 @@ def _gamma_d_params(state):
 
 
 def _cond_d(x, a, b, x1):
-    """
-    Условная плотность y2 при заданном y1 = x1 (перенесено из config.py:
-    cond_d). Линейно «наклонённая» равномерная плотность на [a, b] с
-    наклоном, зависящим от arctan(x1).
-    """
+    """Условная плотность y2 | y1=x1: наклонённая равномерная на [a, b]."""
     if (x < a) or (x > b):
         return 0.
     return 1 / (b - a) * (2 / np.pi * np.arctan(x1) * (x - (a + b) / 2) + 1)
@@ -210,16 +201,7 @@ def _pi_dependent_pdf_grid(state, M_net_n, y_intervals):
 
 @njit(fastmath=True)
 def get_y_dependent(state, y_intervals):
-    """
-    Генератор Y для dependent_gamma: y1 = shift + Gamma(shape, scale=1/beta);
-    y2 | y1 — смесь двух треугольных распределений (мода в a либо в b) с
-    весом alpha, наклонённым в сторону b пропорционально arctan(y1).
-
-    ИСПРАВЛЕНО при переносе (см. отчёт): в filtering.ipynb коэффициент
-    наклона был c = (4/pi)*arctan(y1), что вдвое сильнее наклона,
-    заданного плотностью cond_d (там коэффициент (2/pi)*arctan(y1)).
-    Плотность взята авторитетной — здесь c = (2/pi)*arctan(y1).
-    """
+    """Генератор Y для dependent_gamma, согласованный с _pi_dependent_pdf_grid."""
     if state == 3:
         shape = 22
         scale = 0.001
@@ -267,20 +249,9 @@ def _pi_3point_pdf_grid(state, M_net_n, y_intervals):
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class PiFamily:
-    """
-    Семейство условной плотности π(y|θ): плотность на сетке + согласованный
-    с ней джитованный генератор.
-
-    pdf_grid(state, M_net_n, y_intervals) -> np.ndarray (n_grid,)
-        ненормированная совместная плотность на сетке M_net_n = M_net[state]
-        формы (n_grid, M).
-    sampler(state, y_intervals) -> list[float]
-        джитованный генератор M координат Y, распределённых согласно
-        pdf_grid.
-    normalize_on_grid : bool
-        True  — нормировать по сетке: pdf /= pdf.sum() * delta[state];
-        False — доверять аналитической нормировке pdf_grid (как у uniform).
-    """
+    """Семейство π(y|θ): плотность на сетке (pdf_grid) + согласованный
+    джитованный генератор (sampler); normalize_on_grid включает нормировку
+    pdf по сетке."""
     name: str
     pdf_grid: Callable
     sampler: Callable
@@ -288,10 +259,8 @@ class PiFamily:
 
 
 def separable(pdf_1d):
-    """
-    Строит совместную ненормированную плотность на сетке из одномерной
-    плотности pdf_1d(x, a, b) в предположении независимости координат Y.
-    """
+    """Строит совместную плотность на сетке из одномерной pdf_1d(x, a, b)
+    в предположении независимости координат Y."""
     def pdf_grid(state, M_net_n, y_intervals):
         res = np.ones(M_net_n.shape[0])
         for j, y_interval in enumerate(y_intervals):
@@ -306,16 +275,8 @@ _REGISTRY = {}
 
 
 def register_pi_family(name_or_family):
-    """
-    Регистрация семейства. Можно вызвать как декоратор над функцией без
-    аргументов, строящей PiFamily:
-
-        @register_pi_family('my_family')
-        def _build():
-            return PiFamily(...)
-
-    либо передать готовый объект: register_pi_family(family).
-    """
+    """Регистрация семейства: декоратор над builder() -> PiFamily либо
+    прямой вызов с готовым объектом PiFamily."""
     if isinstance(name_or_family, PiFamily):
         _REGISTRY[name_or_family.name] = name_or_family
         return name_or_family
@@ -386,19 +347,7 @@ register_pi_family(PiFamily(
 
 
 def build_pi(family, N, M_net, nets, y_intervals, delta):
-    """
-    Строит π(y|θ) на сетке для всех N состояний. Заменяет старый
-    get_distributions(N, M_net, nets, y_intervals, deltas).
-
-    family : имя семейства из реестра либо объект PiFamily.
-    M_net  : (N, n_grid, M) — совместная сетка по состояниям.
-    nets   : список одномерных сеток по состояниям (передаётся не всем
-             семействам — большинству достаточно M_net[n] и y_intervals).
-    delta  : (N,) — шаг интегрирования по сетке (произведение шагов по
-             координатам) для каждого состояния.
-
-    Возвращает pi формы (N, n_grid).
-    """
+    """Строит π(y|θ) формы (N, n_grid) на сетке для всех N состояний."""
     fam = get_pi_family(family)
     n_grid = M_net.shape[1]
     pi = np.empty((N, n_grid))

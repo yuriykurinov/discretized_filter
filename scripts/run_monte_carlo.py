@@ -143,6 +143,7 @@ def main():
             cfg.pi_init, cfg.pi, cfg.M_net, cfg.C,
             cfg.N, cfg.Lambda, cfg.ht, cfg.delta, cfg.obs_density,
             n_points=cfg.n_points, two_jumps=cfg.two_jumps,
+            filter_step=cfg.filter_step,
         )
 
         est = filt.estimate()

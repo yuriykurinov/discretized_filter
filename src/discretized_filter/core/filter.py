@@ -1,31 +1,27 @@
 """Ядра переходного оператора и класс фильтра.
 
-Реализуются формулы (transition_kernel:1-2) из
-``article/my_notes/discretized_filter.tex`` с усечением ряда по числу скачков
-на отрезке ``[t_k, t_{k+1}]`` длины ``ht``: слагаемые r = 0, r = 1 и
-(опционально) r = 2. Веса времён пребывания -- из представления (repr:rho).
+Формулы (transition_kernel:1-2) из ``article/my_notes/discretized_filter.tex``
+с усечением ряда по числу скачков на шаге длины ``ht``: r = 0, r = 1 и
+(опционально) r = 2; веса времён пребывания -- из представления (repr:rho).
 
 Соглашения:
-  * ``C[n, y, k, p]`` -- скорость накопления p-го параметра плотности k-го
-    канала наблюдения в состоянии ``(theta = n, Y = y)``; параметры плотности
-    приращения складываются линейно по временам пребывания:
-        params[k, :] = sum_j u_j * C[i_j, y_j, k, :].
-    Нормальный случай -- P = 2, C[..., 0] = f, C[..., 1] = gg^T.
-  * ``obs_density(obs[K], params[K, P]) -> float64`` -- джитованная совместная
-    плотность приращения (см. ``core.densities``); фильтр не делает никаких
-    предположений о её виде.
+  * ``C[n, y, k, p]`` -- p-й параметр плотности k-го канала в состоянии
+    ``(theta = n, Y = y)``;
+  * ``obs_density(obs[K], u[R], comp[R, K, P], n_comp) -> float64`` --
+    джитованная совместная плотность приращения (см. ``core.densities``):
+    ядро передаёт времена пребывания ``u`` и параметры компонент ``comp``, а
+    способ их свёртки (линейное накопление или смесь) выбирает сама плотность;
   * ``Lambda`` -- генератор цепи, строки суммируются в ноль,
     ``lam[m] = Lambda[m, m] <= 0``; ``Lambda[n, m]`` -- интенсивность перехода
-    n -> m.
+    n -> m;
   * ``psi``, ``pi`` -- ненормированная и априорная плотности по сетке ``y``;
-    интегрирование по ``y`` -- сумма с весом ``delta[n]``.
-  * Порядок операций на шаге: ``update(obs)`` применяет переход и обновление
-    по наблюдению одновременно (ядро уже содержит плотность приращения),
-    затем нормирует ``psi``.
+    интегрирование по ``y`` -- сумма с весом ``delta[n]``;
+  * ``update(obs)`` применяет переход и обновление по наблюдению
+    одновременно (ядро уже содержит плотность приращения), затем нормирует.
 
-Буфер ``buf`` формы ``(K, P)`` выделяется один раз на итерацию ``nb.prange``
-(то есть является приватным для потока) и прокидывается во все ядра, чтобы во
-внутренних циклах не было аллокаций.
+Буферы ``w`` формы ``(3,)`` и ``comp`` формы ``(3, K, P)`` выделяются один раз
+на итерацию ``nb.prange`` (приватны для потока) и прокидываются во все ядра,
+чтобы во внутренних циклах не было аллокаций.
 """
 
 import numpy as np
@@ -33,43 +29,39 @@ import numba as nb
 
 
 @nb.njit(fastmath=True)
-def zero_jump_kernel(m, y, obs, ht, C, lam, obs_density, buf):
-    """Слагаемое r = 0 (скачков на отрезке нет), формула transition_kernel:1.
-
-    Всё время ``ht`` проведено в состоянии ``(m, y)``, поэтому
-    ``params = ht * C[m, y]``, а вес времени пребывания -- ``exp(ht*lam[m])``
-    (ровно один множитель, а не K штук).
-    """
-    for k in range(buf.shape[0]):
-        for p in range(buf.shape[1]):
-            buf[k, p] = ht * C[m, y, k, p]
-    return np.exp(ht * lam[m]) * obs_density(obs, buf)
+def zero_jump_kernel(m, y, obs, ht, C, lam, obs_density, w, comp):
+    """Слагаемое r = 0: всё время ``ht`` проведено в ``(m, y)``."""
+    w[0] = ht
+    for k in range(comp.shape[1]):
+        for p in range(comp.shape[2]):
+            comp[0, k, p] = C[m, y, k, p]
+    # вес времени пребывания -- ровно один множитель, а не K штук
+    return np.exp(ht * lam[m]) * obs_density(obs, w, comp, 1)
 
 
 @nb.njit(fastmath=True)
-def integrand(tau, m, y, n, v, obs, pi, C, Lambda, ht, obs_density, buf):
-    """Подынтегральное выражение слагаемого r = 1.
-
-    Траектория провела ``tau`` в исходном состоянии ``(n, v)`` и оставшееся
-    время ``ht - tau`` в конечном состоянии ``(m, y)``.
-    """
+def integrand(tau, m, y, n, v, obs, pi, C, Lambda, ht, obs_density, w, comp):
+    """Подынтегральное выражение r = 1: ``tau`` в ``(n, v)``, ``ht - tau`` в ``(m, y)``."""
     if pi[m, y] == 0:
         return 0.0
     else:
-        for k in range(buf.shape[0]):
-            for p in range(buf.shape[1]):
-                buf[k, p] = tau * C[n, v, k, p] + (ht - tau) * C[m, y, k, p]
+        w[0] = tau
+        w[1] = ht - tau
+        for k in range(comp.shape[1]):
+            for p in range(comp.shape[2]):
+                comp[0, k, p] = C[n, v, k, p]
+                comp[1, k, p] = C[m, y, k, p]
         return (
             pi[m, y]
             * Lambda[n, m]
-            * obs_density(obs, buf)
+            * obs_density(obs, w, comp, 2)
             * np.exp(tau * Lambda[n, n] + (ht - tau) * Lambda[m, m])
         )
 
 
 @nb.njit(fastmath=True)
 def single_jump_kernel(
-    m, y, n, v, obs, ht, C, Lambda, pi, method, n_points, obs_density, buf
+    m, y, n, v, obs, ht, C, Lambda, pi, method, n_points, obs_density, w, comp
 ):
     """Слагаемое r = 1: интеграл по времени скачка методом прямоугольников."""
     res = 0.0
@@ -84,7 +76,7 @@ def single_jump_kernel(
 
     for _ in range(n_points):
         res += integrand(
-            tau, m, y, n, v, obs, pi, C, Lambda, ht, obs_density, buf
+            tau, m, y, n, v, obs, pi, C, Lambda, ht, obs_density, w, comp
         ) * step
         tau += step
     return res
@@ -92,27 +84,24 @@ def single_jump_kernel(
 
 @nb.njit(fastmath=True)
 def integrand2(
-    tau1, tau2, m, y, k, z, n, v, obs, pi, C, Lambda, ht, obs_density, buf
+    tau1, tau2, m, y, k, z, n, v, obs, pi, C, Lambda, ht, obs_density, w, comp
 ):
-    """Подынтегральное выражение слагаемого r = 2.
-
-    Траектория: ``tau1`` в ``(n, v)``, затем ``tau2`` в промежуточном
-    состоянии ``(k, z)``, затем ``ht - tau1 - tau2`` в конечном ``(m, y)``.
-    """
+    """Подынтегральное выражение r = 2: ``tau1`` в ``(n, v)``, ``tau2`` в ``(k, z)``, остаток в ``(m, y)``."""
     if pi[m, y] == 0:
         return 0.0
     else:
-        for kk in range(buf.shape[0]):
-            for p in range(buf.shape[1]):
-                buf[kk, p] = (
-                    tau1 * C[n, v, kk, p]
-                    + tau2 * C[k, z, kk, p]
-                    + (ht - tau1 - tau2) * C[m, y, kk, p]
-                )
+        w[0] = tau1
+        w[1] = tau2
+        w[2] = ht - tau1 - tau2
+        for kk in range(comp.shape[1]):
+            for p in range(comp.shape[2]):
+                comp[0, kk, p] = C[n, v, kk, p]
+                comp[1, kk, p] = C[k, z, kk, p]
+                comp[2, kk, p] = C[m, y, kk, p]
         return (
             pi[m, y] * pi[k, z]
             * Lambda[n, k] * Lambda[k, m]
-            * obs_density(obs, buf)
+            * obs_density(obs, w, comp, 3)
             * np.exp(
                 tau1 * Lambda[n, n]
                 + tau2 * Lambda[k, k]
@@ -124,10 +113,10 @@ def integrand2(
 @nb.njit(fastmath=True)
 def double_jump_kernel(
     m, y, n, v, obs, ht, C, Lambda, pi, method, n_points, delta,
-    obs_density, buf
+    obs_density, w, comp
 ):
     """Слагаемое r = 2: сумма по промежуточному состоянию и двойной интеграл
-    по временам скачков (прямоугольники по симплексу tau1 + tau2 <= ht)."""
+    по симплексу tau1 + tau2 <= ht."""
     res = 0.0
 
     step = ht / n_points
@@ -157,7 +146,8 @@ def double_jump_kernel(
                         Lambda,
                         ht,
                         obs_density,
-                        buf
+                        w,
+                        comp
                     ) * step * step * delta
     return res
 
@@ -167,21 +157,18 @@ def filter_step(
     psi, obs, C, Lambda, lam, pi, ht, delta, N, n_points, two_jumps,
     obs_density
 ):
-    """Один шаг рекурсии для ненормированной условной плотности.
-
-    Возвращает ``res[m, y]`` -- ненормированную плотность после перехода и
-    учёта приращения наблюдения ``obs`` формы ``(K,)``.
-    """
+    """Один шаг рекурсии для ненормированной условной плотности ``res[m, y]``."""
     res = np.zeros(psi.shape)
     n_channels = C.shape[2]
     n_slots = C.shape[3]
 
     for y in nb.prange(psi.shape[1]):
-        # буфер параметров, приватный для потока
-        buf = np.empty((n_channels, n_slots))
+        # буферы времён пребывания и параметров компонент, приватные для потока
+        w = np.empty(3)
+        comp = np.empty((3, n_channels, n_slots))
         for m in range(N):
             res[m, y] += psi[m, y] * zero_jump_kernel(
-                m, y, obs, ht, C, lam, obs_density, buf
+                m, y, obs, ht, C, lam, obs_density, w, comp
             )
             for n in range(N):
                 if m != n:
@@ -190,7 +177,7 @@ def filter_step(
                             single_jump_kernel(
                                 m, y, n, v, obs, ht, C, Lambda, pi,
                                 0, n_points,  # mid-rectangular method = 0
-                                obs_density, buf
+                                obs_density, w, comp
                             )
                             * psi[n, v]
                             * delta[n]
@@ -201,7 +188,7 @@ def filter_step(
                             double_jump_kernel(
                                 m, y, n, v, obs, ht, C, Lambda, pi,
                                 0, n_points, delta[n],  # mid-rectangular
-                                obs_density, buf
+                                obs_density, w, comp
                             )
                             * psi[n, v]
                             * delta[n]
@@ -212,12 +199,9 @@ def filter_step(
 class Filter(object):
     """Дискретизированный фильтр для скрытой марковской цепи со сносом.
 
-    Параметры
-    ---------
-    C : float64[N, n_grid, K, P]
-        Скорости накопления параметров плотности приращения наблюдений.
-    obs_density : джитованная функция (obs[K], params[K, P]) -> float64
-        Совместная плотность приращения наблюдений (см. ``core.densities``).
+    ``C`` -- ``float64[N, n_grid, K, P]``, параметры плотности приращения
+    наблюдений по состояниям; ``obs_density`` -- джитованная функция
+    ``(obs[K], u[R], comp[R, K, P], n_comp) -> float64``.
     """
 
     def __init__(

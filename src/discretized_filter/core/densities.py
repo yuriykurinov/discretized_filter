@@ -1,29 +1,8 @@
-"""Плотности приращения наблюдений.
+"""Плотности приращения наблюдений и фабрика ``obs_density`` для ``core.filter``.
 
-Приращение наблюдения по каналу ``k`` на отрезке длины ``h`` имеет плотность
-с вектором параметров
-
-    params[k, :] = sum_j u_j * C[i_j, y_j, k, :],
-
-где ``u_j`` -- времена пребывания траектории ``(theta, Y)`` в состояниях
-``(i_j, y_j)``, а ``C[n, y, k, p]`` -- скорость накопления p-го параметра.
-Ключевое (и единственное) требование к семейству плотностей: параметры
-накапливаются **линейно по временам пребывания** -- это выполнено для любого
-безгранично делимого приращения. Формулы (transition_kernel:1-2) из
-``article/my_notes/discretized_filter.tex``: нормальный случай -- частный
-вариант с P = 2 слотами, ``C[..., 0] = f`` (снос), ``C[..., 1] = gg^T``
-(дисперсия).
-
-Интерфейс плотности, которую ждёт ``core.filter``:
-
-    obs_density(obs: float64[:], params: float64[:, :]) -> float64
-        obs.shape    == (K,)      наблюдённое приращение по каналам
-        params.shape == (K, P)    накопленные параметры
-        возвращает совместную плотность prod_k p_k(obs[k]; params[k])
-
-Пользователь может передать в фильтр свою джитованную функцию с такой же
-сигнатурой -- ``make_obs_density`` лишь удобная фабрика для встроенных видов
-каналов.
+Интерфейс: ``obs_density(obs[K], u[R], comp[R, K, P], n_comp) -> float64``, где
+``u[r]`` -- время пребывания в r-й компоненте (r < n_comp, sum u = ht), а
+``comp[r, k, :]`` -- параметры k-го канала в этой компоненте.
 """
 
 import math
@@ -35,26 +14,23 @@ import numba as nb
 # Коды встроенных видов каналов.
 NORMAL = 0
 POISSON = 1
+PARETO = 2
 
 # Число используемых слотов параметров для каждого вида канала.
 _N_PARAMS = {
     NORMAL: 2,   # (снос, дисперсия)
     POISSON: 1,  # (интенсивность,)
+    PARETO: 3,   # (loc, scale, alpha)
 }
 
 
 def n_params_for(kind):
-    """Число слотов параметров, которые использует канал вида ``kind``.
-
-    Обычная (не джитованная) функция: вызывается сборщиком конфига, чтобы
-    определить P = max_k n_params_for(kinds[k]); лишние слоты заполняются
-    нулями.
-    """
+    """Число слотов параметров, которые использует канал вида ``kind``."""
     kind = int(kind)
     if kind not in _N_PARAMS:
         raise ValueError(
             f'неизвестный вид канала наблюдения: {kind}; '
-            f'доступны NORMAL={NORMAL}, POISSON={POISSON}'
+            f'доступны NORMAL={NORMAL}, POISSON={POISSON}, PARETO={PARETO}'
         )
     return _N_PARAMS[kind]
 
@@ -63,16 +39,19 @@ def n_params_for(kind):
 class ObsChannel:
     """Спецификация одного канала наблюдения для сборщика конфига.
 
-    ``drift``/``var``/``intensity`` -- джитованные функции
-    ``(t, y, theta) -> float64[:, :]``, как ``g``/``sigma``/``h`` в старом
-    ``config.py``. Для ``NORMAL`` заполняются ``drift`` (слот параметров 0,
-    снос) и ``var`` (слот 1, дисперсия gg^T); для ``POISSON`` -- только
-    ``intensity`` (слот 0).
+    Все поля, кроме ``kind`` и ``noise``, -- джитованные функции
+    ``(t, y, theta) -> float64[:, :]``. ``kind`` задаёт плотность
+    правдоподобия, ``loc``/``scale``/``alpha`` и ``noise`` -- порождающий
+    процесс, поэтому они допустимы при любом ``kind``.
     """
     kind: int
     drift: Callable = None
     var: Callable = None
     intensity: Callable = None
+    noise: Callable = None
+    loc: Callable = None
+    scale: Callable = None
+    alpha: Callable = None
 
     def __post_init__(self):
         kind = int(self.kind)
@@ -87,6 +66,21 @@ class ObsChannel:
                 raise ValueError(
                     'ObsChannel(kind=POISSON) требует intensity'
                 )
+        elif kind == PARETO:
+            if self.loc is None or self.scale is None or self.alpha is None:
+                raise ValueError(
+                    'ObsChannel(kind=PARETO) требует loc, scale и alpha'
+                )
+        if self.noise is not None and self.intensity is not None:
+            raise ValueError(
+                'ObsChannel.noise несовместим с intensity'
+            )
+        pareto_gen = (self.loc, self.scale, self.alpha)
+        if any(f is not None for f in pareto_gen) and any(
+                f is None for f in pareto_gen):
+            raise ValueError(
+                'ObsChannel.loc/scale/alpha задаются все вместе или ни одного'
+            )
 
 
 @nb.njit(nb.float64(nb.float64, nb.float64, nb.float64), fastmath=True, cache=True)
@@ -95,40 +89,68 @@ def normal_pdf(x, mu, var):
     return math.exp(-(x - mu)**2 / (2 * var)) / math.sqrt(2 * math.pi * var)
 
 
+@nb.njit(nb.float64(nb.float64, nb.float64, nb.float64, nb.float64),
+         fastmath=True, cache=True)
+def pareto_obs_pdf(x, loc, scale, alpha):
+    """Плотность ``x = loc + scale*(1 + Z/sqrt(12))``, Z -- стандартизованное Парето."""
+    if scale <= 0.0 or alpha <= 2.0:
+        return 0.0
+    m = alpha / (alpha - 1.0)
+    s = math.sqrt(alpha / (alpha - 2.0)) / (alpha - 1.0)
+    j = s * math.sqrt(12.0) / scale
+    p = m + j * (x - loc - scale)
+    if p < 1.0:
+        return 0.0
+    return alpha / p**(alpha + 1.0) * j
+
+
 @nb.njit(nb.float64(nb.float64, nb.float64), fastmath=True, cache=True)
 def poisson_pmf(x, lam):
-    """Вероятность Pois(lam) в точке x (x предполагается целым >= 0).
-
-    Вырожденный случай lam <= 0 -- это точечная масса в нуле; он возникает,
-    когда интенсивность канала обнуляется на всей траектории, и обрабатывается
-    явно, чтобы не получить log(0) и NaN.
-    """
+    """Вероятность Pois(lam) в точке x (x предполагается целым >= 0)."""
+    # lam <= 0 -- точечная масса в нуле; иначе получили бы log(0) и NaN.
     if lam <= 0.0:
         return 1.0 if x == 0.0 else 0.0
     return math.exp(x * math.log(lam) - lam - math.lgamma(x + 1.0))
 
 
 def make_obs_density(kinds):
-    """Собрать джитованную ``obs_density`` для набора видов каналов.
-
-    ``kinds`` -- последовательность целых кодов (NORMAL / POISSON), по одному
-    на канал. Возвращается замыкание по однородному кортежу кодов: numba
-    допускает динамическую индексацию UniTuple, поэтому цикл по каналам
-    компилируется без ``literal_unroll``.
-    """
+    """Собрать джитованную ``obs_density`` для набора видов каналов."""
+    # Замыкание по однородному кортежу кодов: numba допускает динамическую
+    # индексацию UniTuple, поэтому цикл по каналам обходится без literal_unroll.
     kinds = tuple(int(k) for k in kinds)
     for kind in kinds:
         n_params_for(kind)  # проверка кода вида канала
 
-    @nb.njit(nb.float64(nb.float64[:], nb.float64[:, :]), fastmath=True)
-    def obs_density(obs, params):
+    @nb.njit(nb.float64(nb.float64[:], nb.float64[:], nb.float64[:, :, :],
+                        nb.int64), fastmath=True)
+    def obs_density(obs, u, comp, n_comp):
+        ht = 0.0
+        for r in range(n_comp):
+            ht += u[r]
         res = 1.0
         for k in range(len(kinds)):
             kind = kinds[k]
             if kind == NORMAL:
-                res *= normal_pdf(obs[k], params[k, 0], params[k, 1])
+                # безгранично делимый случай: параметры линейны по u
+                mu = 0.0
+                v = 0.0
+                for r in range(n_comp):
+                    mu += u[r] * comp[r, k, 0]
+                    v += u[r] * comp[r, k, 1]
+                res *= normal_pdf(obs[k], mu, v)
             elif kind == POISSON:
-                res *= poisson_pmf(obs[k], params[k, 0])
+                lam = 0.0
+                for r in range(n_comp):
+                    lam += u[r] * comp[r, k, 0]
+                res *= poisson_pmf(obs[k], lam)
+            elif kind == PARETO:
+                # Парето не безгранично делимо: смесь с весами u[r]/ht
+                d = 0.0
+                for r in range(n_comp):
+                    d += (u[r] / ht) * pareto_obs_pdf(
+                        obs[k], comp[r, k, 0], comp[r, k, 1], comp[r, k, 2]
+                    )
+                res *= d
         return res
 
     return obs_density

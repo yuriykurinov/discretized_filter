@@ -1,38 +1,11 @@
 """
 Система конфигов эксперимента: ``set_config`` / ``get_config``.
 
-Конфиг -- это модуль в ``configs/<name>.py``, описывающий только "сырые"
-параметры эксперимента: ``exp_id, T, ht, seed, N, Lambda (без диагонали),
-y_intervals, num1, pi_family, channels, n_points, two_jumps`` и, опционально,
-``p0``. ``channels`` -- список ``core.densities.ObsChannel``.
-
-``set_config(name)`` находит файл конфига (по имени в ``PROJECT_ROOT/configs``,
-по имени с расширением ``.py`` или по полному пути), грузит его через
-``importlib.util.spec_from_file_location`` (свежий модуль при каждом вызове --
-никакого протухшего состояния между конфигами), сеет все ГПСЧ и строит
-производные величины: сетки ``nets``/``M_net``, шаги интегрирования
-``delta``/``deltas``, стационарное ``p0`` (если не задано), матрицу скоростей
-параметров плотности наблюдений ``C``, совместную плотность ``obs_density``,
-условную плотность ``pi``/``pi_init`` и генератор траектории Y ``get_y``,
-а также ``get_obs`` -- генератор приращений наблюдений для симуляции.
-Результат публикуется как атрибуты возвращаемого объекта и одновременно в
-``globals()`` этого модуля, так что::
-
-    from discretized_filter.config import set_config
-    set_config('example_for_arc_new')
-    from discretized_filter.config import *   # N, T, ht, M_net, C, pi, ...
-
-работает так же, как раньше работал плоский ``config.py``.
-
-Диспетчеризация ``get_obs`` по каналам сделана НЕ по ``kind`` (виду
-плотности, которым фильтр аппроксимирует правдоподобие приращения), а по
-тому, задан ли у канала ``intensity``: ``intensity`` описывает истинный
-порождающий процесс наблюдения (считающий/пуассоновский) и не должен
-зависеть от того, каким видом плотности фильтр моделирует его правдоподобие
-(``NORMAL`` -- гауссовская аппроксимация момента, ``POISSON`` -- точное
-правдоподобие). Это позволяет двум конфигам с одинаковым каналом (одна и та
-же истинная траектория и одни и те же наблюдения), но разным ``kind`` этого
-канала, честно сравнить эффект замены аппроксимирующей плотности на точную.
+Конфиг -- модуль в ``configs/<name>.py``, описывающий "сырые" параметры
+эксперимента (``_RAW_NAMES``, ``channels`` -- список ``core.densities.
+ObsChannel``); ``set_config`` грузит его и строит производные величины
+(сетки, ``C``, ``obs_density``, ``pi``, ``get_obs`` и т.д.), публикуя их
+как атрибуты возвращаемого объекта и в ``globals()`` этого модуля.
 """
 import importlib.util
 import os
@@ -47,8 +20,13 @@ import numba as nb
 from discretized_filter.paths import CONFIGS_DIR
 from discretized_filter.utils.grids import set_seed, cartesian_product
 from discretized_filter.utils.distributions import get_pi_family, build_pi
-from discretized_filter.core.densities import NORMAL, POISSON, n_params_for, make_obs_density
-from discretized_filter.core.smjp import make_discretized_xi, make_discretized_eta
+from discretized_filter.core.densities import NORMAL, POISSON, PARETO, n_params_for, make_obs_density
+from discretized_filter.core.filter import filter_step as generic_filter_step
+from discretized_filter.core.filter_normal import filter_step_normal
+from discretized_filter.core.smjp import (
+    make_discretized_xi, make_discretized_eta, make_xi_generator,
+    make_discretized_pareto,
+)
 
 
 # Обязательные "сырые" имена, которые должен определять файл конфига.
@@ -62,7 +40,7 @@ _RAW_NAMES = (
 _DERIVED_NAMES = (
     'M', 'K', 'P', 't_net_filtering', 'p0', 'lam', 'Lam', 'nets', 'M_net',
     'delta', 'deltas', 'pi', 'pi_init', 'C', 'obs_density', 'get_y',
-    'get_obs', 'rng', 'num_nodes', 'shared_grid',
+    'get_obs', 'rng', 'num_nodes', 'shared_grid', 'filter_step',
 )
 
 _PUBLIC_NAMES = _RAW_NAMES + _DERIVED_NAMES
@@ -73,12 +51,8 @@ __all__ = ['set_config', 'get_config']
 
 
 def _resolve_config_path(name):
-    """
-    Резолвит имя конфига в файл: принимает имя без расширения ('foo'),
-    с расширением ('foo.py') либо полный/относительный путь. Имя без
-    расширения или относительный путь без расширения ищется относительно
-    CONFIGS_DIR.
-    """
+    """Резолвит имя конфига ('foo', 'foo.py' или путь) в файл; имя без
+    расширения ищется относительно CONFIGS_DIR."""
     p = Path(name)
     if p.suffix != '.py':
         p = p.with_name(p.name + '.py')
@@ -126,27 +100,36 @@ def _build_get_obs(channels):
     """
     Строит generic get_obs(t_net_filtering, theta, y, t) по списку каналов.
 
-    Диспетчеризация -- по наличию ``intensity`` (см. docstring модуля):
-    канал со ``intensity`` -- считающий процесс, make_discretized_eta
-    (возвращает целые счётчики); канал без ``intensity`` (drift + var) --
-    непрерывный гауссовский снос/диффузия, make_discretized_xi. Приращения
-    каналов складываются в столбцы результата в порядке следования
-    channels, с отбрасыванием индекса 0 (момент t=0, приращение всегда 0) --
-    как в прежнем get_obs.
+    Диспетчеризация -- НЕ по ``kind`` (плотность правдоподобия), а по
+    порождающему процессу: ``intensity`` -- считающий процесс
+    (make_discretized_eta); иначе ``loc`` -- смесь Парето по временам
+    пребывания (make_discretized_pareto); иначе непрерывный снос/диффузия
+    (make_discretized_xi либо, если задан ``ch.noise``, make_xi_generator).
+    Приращения складываются в столбцы результата в порядке channels,
+    с отбрасыванием индекса 0 (момент t=0, приращение всегда 0).
     """
     std_fns = tuple(
-        None if ch.intensity is not None else _make_std_fn(ch.var)
+        _make_std_fn(ch.var) if (ch.intensity is None and ch.loc is None) else None
+        for ch in channels
+    )
+    xi_fns = tuple(
+        None if (ch.intensity is not None or ch.loc is not None)
+        else (make_discretized_xi if ch.noise is None else make_xi_generator(ch.noise))
         for ch in channels
     )
 
     def get_obs(t_net_filtering, theta, y, t):
         cols = []
-        for ch, std_fn in zip(channels, std_fns):
+        for ch, std_fn, xi_fn in zip(channels, std_fns, xi_fns):
             if ch.intensity is not None:
                 d = make_discretized_eta(t_net_filtering, ch.intensity, theta, y, t)
                 cols.append(d[1:])
+            elif ch.loc is not None:
+                d = make_discretized_pareto(
+                    t_net_filtering, ch.loc, ch.scale, ch.alpha, theta, y, t)
+                cols.append(d[1:])
             else:
-                d = make_discretized_xi(t_net_filtering, ch.drift, std_fn, theta, y, t, 1)
+                d = xi_fn(t_net_filtering, ch.drift, std_fn, theta, y, t, 1)
                 cols.append(d[1:, 0])
         return np.stack(cols, axis=-1)
 
@@ -270,14 +253,17 @@ def _build(module, path):
                 C[n, :, k, 1] = ch.var(-1, M_net[n], -1)[:, 0]
             elif ch.kind == POISSON:
                 C[n, :, k, 0] = ch.intensity(-1, M_net[n], -1)[:, 0]
+            elif ch.kind == PARETO:
+                C[n, :, k, 0] = ch.loc(-1, M_net[n], -1)[:, 0]
+                C[n, :, k, 1] = ch.scale(-1, M_net[n], -1)[:, 0]
+                C[n, :, k, 2] = ch.alpha(-1, M_net[n], -1)[:, 0]
             else:
                 raise ValueError(f'неизвестный вид канала наблюдения: {ch.kind}')
 
-    # normal_pdf не защищена от нулевой дисперсии -- эту инвариантность
-    # обязан обеспечивать сборщик конфига.
-    # Проверяем по ВСЕЙ сетке, а не только там, где pi > 0: zero_jump_kernel
-    # вычисляется для каждого узла безусловно, а 0.0 * NaN == NaN, поэтому
-    # узел с нулевой дисперсией отравит psi даже при pi == 0 в нём.
+    # normal_pdf не защищена от нулевой дисперсии, pareto_obs_pdf -- от
+    # alpha <= 2 (дисперсия шума бесконечна). Проверяем по ВСЕЙ сетке, а не
+    # только там, где pi > 0: zero_jump_kernel вычисляется для каждого узла
+    # безусловно, а 0.0 * NaN == NaN.
     for k, ch in enumerate(channels):
         if ch.kind == NORMAL:
             bad = ~(C[:, :, k, 1] > 0)
@@ -288,8 +274,25 @@ def _build(module, path):
                     f'(из {bad.size}); normal_pdf не защищена от нулевой '
                     'дисперсии и даст NaN'
                 )
+        elif ch.kind == PARETO:
+            bad_scale = ~(C[:, :, k, 1] > 0)
+            bad_alpha = ~(C[:, :, k, 2] > 2.0)
+            if np.any(bad_scale) or np.any(bad_alpha):
+                raise AssertionError(
+                    f'канал {k} (PARETO): scale <= 0 в {int(bad_scale.sum())} '
+                    f'узлах, alpha <= 2 в {int(bad_alpha.sum())} узлах сетки '
+                    f'(из {bad_scale.size}); pareto_obs_pdf вырождается в '
+                    'тождественный ноль в обоих случаях'
+                )
 
     obs_density = make_obs_density(tuple(ch.kind for ch in channels))
+
+    # гауссовский случай устойчив: параметры складываются линейно, поэтому
+    # работает специализированное ядро без буферов и вызова obs_density
+    filter_step = (
+        filter_step_normal if all(ch.kind == NORMAL for ch in channels)
+        else generic_filter_step
+    )
 
     fam = get_pi_family(pi_family)
     get_y = fam.sampler
@@ -306,6 +309,7 @@ def _build(module, path):
         Lam=Lam, nets=nets, M_net=M_net, delta=delta, deltas=deltas,
         pi=pi, pi_init=pi_init, C=C, obs_density=obs_density, get_y=get_y,
         get_obs=get_obs, rng=rng, num_nodes=num_nodes, shared_grid=shared_grid,
+        filter_step=filter_step,
     )
     # метаданные для save_config_copy -- не публикуются через globals()/__all__
     cfg._config_path = path
@@ -314,14 +318,8 @@ def _build(module, path):
 
 
 def set_config(name=None):
-    """
-    Устанавливает активный конфиг и публикует его величины в этот модуль.
-
-    ``name`` -- имя файла в configs/ (с расширением или без), либо полный
-    путь. Если не передан, берётся из переменной окружения DFILTER_CONFIG.
-    Повторный вызов заменяет активный конфиг: имена предыдущего конфига
-    убираются из globals() перед публикацией новых.
-    """
+    """Устанавливает активный конфиг и публикует его величины в этот модуль
+    (``name`` по умолчанию берётся из DFILTER_CONFIG)."""
     global _ACTIVE
 
     if name is None:

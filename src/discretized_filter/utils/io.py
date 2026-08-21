@@ -26,8 +26,7 @@ def load_saved_path(exp_id):
     #     deta = pickle.load(f)
     return theta, y, t, theta_est, y_est, observations
 
-# копия активного конфига (см. discretized_filter.config.set_config) --
-# берётся его исходный файл, а не 'config.py' в cwd / модуль 'config'
+# копия активного конфига с метаданными
 def save_config_copy(exp_id):
     config_content = None
     exp_path = saved_path_dir(exp_id)

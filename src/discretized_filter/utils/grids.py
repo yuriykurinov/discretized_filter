@@ -8,7 +8,6 @@ def set_seed(seed):
     np.random.seed(seed)
 
 
-#декартово произведение
 def cartesian_product(arrays):
     la = len(arrays)
     arr = np.empty([len(a) for a in arrays] + [la])
@@ -26,7 +25,6 @@ def get_index(eta, t_net, t_net0):
     return np.array(index)
 
 def to_discrete(jumps, time, T, h):
-    #переводит кусочно-постоянное представление в дискретное
     from math import ceil
     res = np.empty((ceil(T/h),) + np.shape(jumps[0]), dtype=jumps.dtype)
     j = 0
