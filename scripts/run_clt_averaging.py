@@ -1,5 +1,5 @@
 """
-ЦПТ-фильтры Парето при разных объёмах осреднения n = 10, 20, 50, ... против
+ЦПТ-фильтры Парето при разных объёмах осреднения n = 1, 10, 20, 50 против
 точного фильтра -- на ОДНОЙ траектории (theta, Y) и ОДНОМ потоке наблюдений
 с шагом ht=1. Обобщение ``scripts/run_pareto_comparison.py`` (там объём
 блока фиксирован и равен ``ht`` конфига approx/clt) на набор объёмов
@@ -37,8 +37,8 @@
   * theta_est_delta -- delta[n] * sum_y psi[n, y] (формула (3.7) статьи).
 
 Запуск:
-    .venv/bin/python scripts/run_clt_averaging.py --hours 0.2 --ns 10,20,50
-    .venv/bin/python scripts/run_clt_averaging.py                # весь T, n=10,20,50
+    .venv/bin/python scripts/run_clt_averaging.py --hours 0.2 --ns 1,10,20,50
+    .venv/bin/python scripts/run_clt_averaging.py                # весь T, n=1,10,20,50
     .venv/bin/python scripts/run_clt_averaging.py --no-exact --ns 5,20,100
 """
 import _bootstrap  # noqa: F401
@@ -77,9 +77,9 @@ def parse_args():
                      'против точного фильтра на одной траектории.'
     )
     parser.add_argument(
-        '--ns', default='10,20,50',
+        '--ns', default='1,10,20,50',
         help='объёмы осреднения блока -- список положительных целых через '
-             'запятую, без повторов (по умолчанию "10,20,50")',
+             'запятую, без повторов (по умолчанию "1,10,20,50")',
     )
     parser.add_argument(
         '--hours', type=float, default=None,
@@ -386,7 +386,7 @@ def main():
         results['exact'] = (f'точный (загружен), ht={cfg.ht:.0f}', cfg.ht, th, thd, yy)
 
     for n in ns:
-        label = f'ЦПТ (сумма блока n={n})'
+        label = 'ЦПТ (Gaussian, h=1)' if n == 1 else f'ЦПТ (сумма блока n={n})'
         print(f'\n=== {label} ({CLT_CONFIG}, ht(Filter)=n)', flush=True)
         th, thd, yy = run_filter(
             f'n{n}', label, cfg_clt, float(n), obs_by_n[n],
