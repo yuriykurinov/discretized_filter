@@ -37,6 +37,25 @@ def pareto_std(size, alpha):
     return res
 
 
+@njit(fastmath=True, nogil=True, cache=True)
+def exponential_std(size):
+    """Стандартизованный шум Exp(1) - 1 со средним 0 и дисперсией 1."""
+    res = np.empty(size)
+    for i in range(size):
+        res[i] = np.random.exponential(1.0) - 1.0
+    return res
+
+
+@njit(fastmath=True, nogil=True, cache=True)
+def uniform_std(size):
+    """Стандартизованный шум U[-sqrt(3), sqrt(3)]."""
+    res = np.empty(size)
+    bound = np.sqrt(3.0)
+    for i in range(size):
+        res[i] = np.random.uniform(-bound, bound)
+    return res
+
+
 # ---------------------------------------------------------------------------
 # Одномерные (по одной координате Y) ненормированные плотности
 # ---------------------------------------------------------------------------

@@ -20,12 +20,16 @@ import numba as nb
 from discretized_filter.paths import CONFIGS_DIR
 from discretized_filter.utils.grids import set_seed, cartesian_product
 from discretized_filter.utils.distributions import get_pi_family, build_pi
-from discretized_filter.core.densities import NORMAL, POISSON, PARETO, n_params_for, make_obs_density
+from discretized_filter.core.densities import (
+    NORMAL, POISSON, PARETO, EXPONENTIAL, UNIFORM,
+    n_params_for, make_obs_density,
+)
 from discretized_filter.core.filter import filter_step as generic_filter_step
 from discretized_filter.core.filter_normal import filter_step_normal
 from discretized_filter.core.smjp import (
     make_discretized_xi, make_discretized_eta, make_xi_generator,
-    make_discretized_pareto,
+    make_discretized_pareto, make_discretized_exponential,
+    make_discretized_uniform,
 )
 
 
@@ -100,10 +104,9 @@ def _build_get_obs(channels):
     """
     Строит generic get_obs(t_net_filtering, theta, y, t) по списку каналов.
 
-    Диспетчеризация -- НЕ по ``kind`` (плотность правдоподобия), а по
-    порождающему процессу: ``intensity`` -- считающий процесс
-    (make_discretized_eta); иначе ``loc`` -- смесь Парето по временам
-    пребывания (make_discretized_pareto); иначе непрерывный снос/диффузия
+    Диспетчеризация учитывает порождающий процесс: ``intensity`` --
+    считающий процесс (make_discretized_eta); exact kind -- location-scale смесь
+    по временам пребывания; иначе непрерывный снос/диффузия
     (make_discretized_xi либо, если задан ``ch.noise``, make_xi_generator).
     Приращения складываются в столбцы результата в порядке channels,
     с отбрасыванием индекса 0 (момент t=0, приращение всегда 0).
@@ -123,6 +126,14 @@ def _build_get_obs(channels):
         for ch, std_fn, xi_fn in zip(channels, std_fns, xi_fns):
             if ch.intensity is not None:
                 d = make_discretized_eta(t_net_filtering, ch.intensity, theta, y, t)
+                cols.append(d[1:])
+            elif ch.kind == EXPONENTIAL:
+                d = make_discretized_exponential(
+                    t_net_filtering, ch.loc, ch.scale, theta, y, t)
+                cols.append(d[1:])
+            elif ch.kind == UNIFORM:
+                d = make_discretized_uniform(
+                    t_net_filtering, ch.loc, ch.scale, theta, y, t)
                 cols.append(d[1:])
             elif ch.loc is not None:
                 d = make_discretized_pareto(
@@ -257,6 +268,9 @@ def _build(module, path):
                 C[n, :, k, 0] = ch.loc(-1, M_net[n], -1)[:, 0]
                 C[n, :, k, 1] = ch.scale(-1, M_net[n], -1)[:, 0]
                 C[n, :, k, 2] = ch.alpha(-1, M_net[n], -1)[:, 0]
+            elif ch.kind in (EXPONENTIAL, UNIFORM):
+                C[n, :, k, 0] = ch.loc(-1, M_net[n], -1)[:, 0]
+                C[n, :, k, 1] = ch.scale(-1, M_net[n], -1)[:, 0]
             else:
                 raise ValueError(f'неизвестный вид канала наблюдения: {ch.kind}')
 
@@ -283,6 +297,16 @@ def _build(module, path):
                     f'узлах, alpha <= 2 в {int(bad_alpha.sum())} узлах сетки '
                     f'(из {bad_scale.size}); pareto_obs_pdf вырождается в '
                     'тождественный ноль в обоих случаях'
+                )
+        elif ch.kind in (EXPONENTIAL, UNIFORM):
+            bad_scale = ~(C[:, :, k, 1] > 0)
+            if np.any(bad_scale):
+                name = 'EXPONENTIAL' if ch.kind == EXPONENTIAL else 'UNIFORM'
+                raise AssertionError(
+                    f'канал {k} ({name}): scale <= 0 в '
+                    f'{int(bad_scale.sum())} узлах сетки '
+                    f'(из {bad_scale.size}); location-scale плотность '
+                    'вырождается в тождественный ноль'
                 )
 
     obs_density = make_obs_density(tuple(ch.kind for ch in channels))

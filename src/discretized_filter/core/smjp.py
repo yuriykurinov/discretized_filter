@@ -99,10 +99,75 @@ def make_discretized_pareto(t_net, loc_fn, scale_fn, alpha_fn, theta, Y, smjp_ju
         dx[i] = L[chosen] + Sc[chosen] * (1.0 + z / np.sqrt(12.0))
     return dx
 
+
+@njit(nogil=True, cache=True)
+def make_discretized_exponential(t_net, loc_fn, scale_fn, theta, Y, smjp_jumps):
+    """Смесь shifted-exponential компонент по временам пребывания."""
+    n = t_net.shape[0]
+    L = np.zeros(n)
+    Sc = np.zeros(n)
+    for t in range(min(n, Y.shape[0])):
+        L[t] = loc_fn(t, Y[t:t+1], theta[t])[0, 0]
+        Sc[t] = scale_fn(t, Y[t:t+1], theta[t])[0, 0]
+
+    dx = np.zeros(n)
+    pos = 0
+    sqrt12 = np.sqrt(12.0)
+    shift = 1.0 - 1.0 / sqrt12
+    for i in range(1, n):
+        ht = t_net[i] - t_net[i-1]
+        u = np.random.random() * ht
+        acc = 0.0
+        prev_t = t_net[i-1]
+        chosen = -1
+        while (pos < smjp_jumps.shape[0]) and (t_net[i] > smjp_jumps[pos]):
+            acc += smjp_jumps[pos] - prev_t
+            if chosen < 0 and u < acc:
+                chosen = pos
+            prev_t = smjp_jumps[pos]
+            pos += 1
+        if chosen < 0:
+            chosen = pos
+        eps = np.random.exponential(1.0 / sqrt12) + shift
+        dx[i] = L[chosen] + Sc[chosen] * eps
+    return dx
+
+
+@njit(nogil=True, cache=True)
+def make_discretized_uniform(t_net, loc_fn, scale_fn, theta, Y, smjp_jumps):
+    """Смесь uniform location-scale компонент по временам пребывания."""
+    n = t_net.shape[0]
+    L = np.zeros(n)
+    Sc = np.zeros(n)
+    for t in range(min(n, Y.shape[0])):
+        L[t] = loc_fn(t, Y[t:t+1], theta[t])[0, 0]
+        Sc[t] = scale_fn(t, Y[t:t+1], theta[t])[0, 0]
+
+    dx = np.zeros(n)
+    pos = 0
+    for i in range(1, n):
+        ht = t_net[i] - t_net[i-1]
+        u = np.random.random() * ht
+        acc = 0.0
+        prev_t = t_net[i-1]
+        chosen = -1
+        while (pos < smjp_jumps.shape[0]) and (t_net[i] > smjp_jumps[pos]):
+            acc += smjp_jumps[pos] - prev_t
+            if chosen < 0 and u < acc:
+                chosen = pos
+            prev_t = smjp_jumps[pos]
+            pos += 1
+        if chosen < 0:
+            chosen = pos
+        eps = 0.5 + np.random.random()
+        dx[i] = L[chosen] + Sc[chosen] * eps
+    return dx
+
+
 def make_xi_generator(noise):
     """Аналог make_discretized_xi с приращением mean + sqrt(var) * noise(xi_dim)
     вместо mean + sqrt(var) * N(0,1); noise -- джитованная функция со средним 0
-    и дисперсией 1 (см. utils.distributions.pareto_std)."""
+    и дисперсией 1 (см. utils.distributions)."""
     @njit(nogil=True)
     def xi_generator(t_net_filtering, g, sigma, theta, Y, smjp_jumps, xi_dim):
         dxi = np.zeros((t_net_filtering.shape[0], xi_dim))

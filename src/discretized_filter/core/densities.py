@@ -15,12 +15,16 @@ import numba as nb
 NORMAL = 0
 POISSON = 1
 PARETO = 2
+EXPONENTIAL = 3
+UNIFORM = 4
 
 # Число используемых слотов параметров для каждого вида канала.
 _N_PARAMS = {
     NORMAL: 2,   # (снос, дисперсия)
     POISSON: 1,  # (интенсивность,)
     PARETO: 3,   # (loc, scale, alpha)
+    EXPONENTIAL: 2,  # (loc, scale)
+    UNIFORM: 2,      # (loc, scale)
 }
 
 
@@ -30,7 +34,8 @@ def n_params_for(kind):
     if kind not in _N_PARAMS:
         raise ValueError(
             f'неизвестный вид канала наблюдения: {kind}; '
-            f'доступны NORMAL={NORMAL}, POISSON={POISSON}, PARETO={PARETO}'
+            f'доступны NORMAL={NORMAL}, POISSON={POISSON}, PARETO={PARETO}, '
+            f'EXPONENTIAL={EXPONENTIAL}, UNIFORM={UNIFORM}'
         )
     return _N_PARAMS[kind]
 
@@ -71,13 +76,25 @@ class ObsChannel:
                 raise ValueError(
                     'ObsChannel(kind=PARETO) требует loc, scale и alpha'
                 )
+        elif kind in (EXPONENTIAL, UNIFORM):
+            if self.loc is None or self.scale is None:
+                name = 'EXPONENTIAL' if kind == EXPONENTIAL else 'UNIFORM'
+                raise ValueError(
+                    f'ObsChannel(kind={name}) требует loc и scale'
+                )
+            if self.alpha is not None:
+                name = 'EXPONENTIAL' if kind == EXPONENTIAL else 'UNIFORM'
+                raise ValueError(
+                    f'ObsChannel(kind={name}) не использует alpha'
+                )
         if self.noise is not None and self.intensity is not None:
             raise ValueError(
                 'ObsChannel.noise несовместим с intensity'
             )
         pareto_gen = (self.loc, self.scale, self.alpha)
-        if any(f is not None for f in pareto_gen) and any(
-                f is None for f in pareto_gen):
+        if kind not in (EXPONENTIAL, UNIFORM) and (
+                any(f is not None for f in pareto_gen)
+                and any(f is None for f in pareto_gen)):
             raise ValueError(
                 'ObsChannel.loc/scale/alpha задаются все вместе или ни одного'
             )
@@ -102,6 +119,33 @@ def pareto_obs_pdf(x, loc, scale, alpha):
     if p < 1.0:
         return 0.0
     return alpha / p**(alpha + 1.0) * j
+
+
+@nb.njit(nb.float64(nb.float64, nb.float64, nb.float64),
+         fastmath=True, cache=True)
+def exponential_obs_pdf(x, loc, scale):
+    """Плотность ``loc + scale*eps``,
+    ``eps = Exp(rate=sqrt(12)) + 1 - 1/sqrt(12)``."""
+    if scale <= 0.0:
+        return 0.0
+    sqrt12 = math.sqrt(12.0)
+    a = 1.0 - 1.0 / sqrt12
+    e = (x - loc) / scale
+    if e < a:
+        return 0.0
+    return sqrt12 / scale * math.exp(-sqrt12 * (e - a))
+
+
+@nb.njit(nb.float64(nb.float64, nb.float64, nb.float64),
+         fastmath=True, cache=True)
+def uniform_obs_pdf(x, loc, scale):
+    """Плотность ``loc + scale*eps``, ``eps ~ U[0.5, 1.5]``."""
+    if scale <= 0.0:
+        return 0.0
+    e = (x - loc) / scale
+    if e < 0.5 or e > 1.5:
+        return 0.0
+    return 1.0 / scale
 
 
 @nb.njit(nb.float64(nb.float64, nb.float64), fastmath=True, cache=True)
@@ -149,6 +193,22 @@ def make_obs_density(kinds):
                 for r in range(n_comp):
                     d += (u[r] / ht) * pareto_obs_pdf(
                         obs[k], comp[r, k, 0], comp[r, k, 1], comp[r, k, 2]
+                    )
+                res *= d
+            elif kind == EXPONENTIAL:
+                # Точная location-scale модель: смесь по временам пребывания.
+                d = 0.0
+                for r in range(n_comp):
+                    d += (u[r] / ht) * exponential_obs_pdf(
+                        obs[k], comp[r, k, 0], comp[r, k, 1]
+                    )
+                res *= d
+            elif kind == UNIFORM:
+                # Точная location-scale модель: смесь по временам пребывания.
+                d = 0.0
+                for r in range(n_comp):
+                    d += (u[r] / ht) * uniform_obs_pdf(
+                        obs[k], comp[r, k, 0], comp[r, k, 1]
                     )
                 res *= d
         return res

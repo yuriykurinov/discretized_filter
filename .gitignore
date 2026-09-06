@@ -10,6 +10,7 @@ __pycache__/
 *json
 /ping_data
 /results
+temp_*
 
 # рабочие заметки и планы -- не версионируются
 /plans/
