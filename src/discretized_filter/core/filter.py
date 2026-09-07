@@ -249,7 +249,7 @@ class Filter(object):
         self.psi = new_psi / normalizer
 
     def estimate(self):
-        theta_est = self.psi.sum(axis=1)
+        theta_est = self.psi.sum(axis=1) * self.delta
         theta_est = theta_est / theta_est.sum()
         y_est = np.zeros(self.M_net.shape[2])
         for n in range(self.N):
