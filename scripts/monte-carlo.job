@@ -1,0 +1,8 @@
+#!/bin/bash
+#SBATCH --cpus-per-task=64
+
+# Конфиг берётся из DFILTER_CONFIG (наследуется из окружения при sbatch)
+# либо передаётся аргументом задания:
+# sbatch scripts/monte-carlo.job --config <имя> --paths 10000
+cd "${SLURM_SUBMIT_DIR:-.}"
+.venv/bin/python scripts/run_monte_carlo.py "$@"

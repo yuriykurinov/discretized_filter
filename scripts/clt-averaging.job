@@ -1,0 +1,8 @@
+#!/bin/bash
+#SBATCH --cpus-per-task=64
+
+# ЦПТ-фильтры Парето при разных объёмах осреднения против точного фильтра
+# на одной траектории. Аргументы прокидываются в скрипт:
+#   sbatch scripts/clt-averaging.job --hours 3 --ns 10,20,50
+cd "${SLURM_SUBMIT_DIR:-.}"
+.venv/bin/python scripts/run_clt_averaging.py "$@"

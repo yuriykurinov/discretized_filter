@@ -1,0 +1,8 @@
+#!/bin/bash
+#SBATCH --cpus-per-task=64
+
+# Точный фильтр Парето против гауссовских аппроксимаций на одной траектории.
+# Аргументы прокидываются в скрипт:
+#   sbatch scripts/pareto-comparison.job --hours 3
+cd "${SLURM_SUBMIT_DIR:-.}"
+.venv/bin/python scripts/run_pareto_comparison.py "$@"

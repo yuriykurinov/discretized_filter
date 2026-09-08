@@ -1,6 +1,7 @@
 article/
 discretized_filter_venv/
 __pycache__/
+*.egg-info/
 *.png
 /saved_path*
 *.out
@@ -10,3 +11,8 @@ __pycache__/
 /ping_data
 /results
 *.venv/
+temp_*
+
+# рабочие заметки и планы -- не версионируются
+/plans/
+/docs/
