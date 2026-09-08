@@ -1,0 +1,9 @@
+#!/bin/bash
+#SBATCH --cpus-per-task=64
+
+# Точный фильтр против ЦПТ-аппроксимации на трёх каналах наблюдений
+# (Парето, экспоненциальный, равномерный) на одной траектории.
+# Аргументы прокидываются в скрипт:
+#   sbatch scripts/channel-clt-comparison.job --hours 3
+cd "${SLURM_SUBMIT_DIR:-.}"
+.venv/bin/python scripts/run_channel_clt_comparison.py "$@"
