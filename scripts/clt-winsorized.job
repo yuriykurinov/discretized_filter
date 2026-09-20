@@ -1,0 +1,8 @@
+#!/bin/bash
+#SBATCH --cpus-per-task=64
+
+# Сравнение сохранённых исходных ЦПТ-ветвей с винзоризированными ветвями.
+# Аргументы прокидываются в скрипт, например:
+#   sbatch scripts/clt-winsorized.job --quantile 0.999 --ns 1,10,20,50
+cd "${SLURM_SUBMIT_DIR:-.}"
+.venv/bin/python scripts/run_clt_winsorized.py "$@"
