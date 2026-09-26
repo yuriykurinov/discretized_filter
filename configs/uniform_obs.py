@@ -1,4 +1,6 @@
-"""Точный фильтр по каналу UNIFORM: X = loc + scale*eps."""
+"""Точный канал X = p + q*tau, tau ~ U[1/2, 3/2].
+
+E[tau] = 1, Var[tau] = 1/12; E[X|p,q] = p+q, Var[X|p,q] = q²/12."""
 import numpy as np
 from numba import njit
 
