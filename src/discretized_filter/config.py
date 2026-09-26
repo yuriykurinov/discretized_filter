@@ -26,6 +26,7 @@ from discretized_filter.core.densities import (
 )
 from discretized_filter.core.filter import filter_step as generic_filter_step
 from discretized_filter.core.filter_normal import filter_step_normal
+from discretized_filter.core.observations import generate_continuous_observations
 from discretized_filter.core.smjp import (
     make_discretized_xi, make_discretized_eta, make_xi_generator,
     make_discretized_pareto, make_discretized_exponential,
@@ -45,6 +46,7 @@ _DERIVED_NAMES = (
     'M', 'K', 'P', 't_net_filtering', 'p0', 'lam', 'Lam', 'nets', 'M_net',
     'delta', 'deltas', 'pi', 'pi_init', 'C', 'obs_density', 'get_y',
     'get_obs', 'rng', 'num_nodes', 'shared_grid', 'filter_step',
+    'get_continuous_obs', 'continuous_indices', 'counting_indices',
 )
 
 _PUBLIC_NAMES = _RAW_NAMES + _DERIVED_NAMES
@@ -260,10 +262,10 @@ def _build(module, path):
     for n in range(N):
         for k, ch in enumerate(channels):
             if ch.kind == NORMAL:
-                C[n, :, k, 0] = ch.drift(-1, M_net[n], -1)[:, 0]
-                C[n, :, k, 1] = ch.var(-1, M_net[n], -1)[:, 0]
+                C[n, :, k, 0] = ch.drift(-1, M_net[n], n)[:, 0]
+                C[n, :, k, 1] = ch.var(-1, M_net[n], n)[:, 0]
             elif ch.kind == POISSON:
-                C[n, :, k, 0] = ch.intensity(-1, M_net[n], -1)[:, 0]
+                C[n, :, k, 0] = ch.intensity(-1, M_net[n], n)[:, 0]
             elif ch.kind == PARETO:
                 C[n, :, k, 0] = ch.loc(-1, M_net[n], -1)[:, 0]
                 C[n, :, k, 1] = ch.scale(-1, M_net[n], -1)[:, 0]
@@ -323,6 +325,15 @@ def _build(module, path):
 
     get_obs = _build_get_obs(channels)
 
+    def get_continuous_obs(t_grid, theta, y, jump_ends, seed=None):
+        """Генерирует непрерывную траекторию для гауссовских/пуассоновских каналов."""
+        return generate_continuous_observations(
+            t_grid, theta, y, jump_ends, channels, seed=seed,
+        )
+
+    continuous_indices = np.array([k for k, ch in enumerate(channels) if ch.kind == NORMAL], dtype=int)
+    counting_indices = np.array([k for k, ch in enumerate(channels) if ch.kind == POISSON], dtype=int)
+
     rng = np.random.default_rng(seed=seed)
 
     cfg = types.SimpleNamespace(
@@ -334,6 +345,8 @@ def _build(module, path):
         pi=pi, pi_init=pi_init, C=C, obs_density=obs_density, get_y=get_y,
         get_obs=get_obs, rng=rng, num_nodes=num_nodes, shared_grid=shared_grid,
         filter_step=filter_step,
+        get_continuous_obs=get_continuous_obs,
+        continuous_indices=continuous_indices, counting_indices=counting_indices,
     )
     # метаданные для save_config_copy -- не публикуются через globals()/__all__
     cfg._config_path = path
