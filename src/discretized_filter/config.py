@@ -30,7 +30,7 @@ from discretized_filter.core.observations import generate_continuous_observation
 from discretized_filter.core.smjp import (
     make_discretized_xi, make_discretized_eta, make_xi_generator,
     make_discretized_pareto, make_discretized_exponential,
-    make_discretized_uniform,
+    make_discretized_uniform, make_point_pareto,
 )
 
 
@@ -45,7 +45,7 @@ _RAW_NAMES = (
 _DERIVED_NAMES = (
     'M', 'K', 'P', 't_net_filtering', 'p0', 'lam', 'Lam', 'nets', 'M_net',
     'delta', 'deltas', 'pi', 'pi_init', 'C', 'obs_density', 'get_y',
-    'get_obs', 'rng', 'num_nodes', 'shared_grid', 'filter_step',
+    'get_obs', 'get_point_obs', 'rng', 'num_nodes', 'shared_grid', 'filter_step',
     'get_continuous_obs', 'continuous_indices', 'counting_indices',
 )
 
@@ -323,8 +323,6 @@ def _build(module, path):
     fam = get_pi_family(pi_family)
     get_y = fam.sampler
 
-    get_obs = _build_get_obs(channels)
-
     def get_continuous_obs(t_grid, theta, y, jump_ends, seed=None):
         """Генерирует непрерывную траекторию для гауссовских/пуассоновских каналов."""
         return generate_continuous_observations(
@@ -336,6 +334,17 @@ def _build(module, path):
 
     rng = np.random.default_rng(seed=seed)
 
+    def get_point_obs(t_net, theta, y, jump_ends):
+        """Генерирует точечные наблюдения для одного канала Парето."""
+        if len(channels) != 1 or channels[0].kind != PARETO:
+            raise ValueError('point observations require one Pareto channel')
+        ch = channels[0]
+        return make_point_pareto(t_net, ch.loc, ch.scale, ch.alpha,
+                                 theta, y, jump_ends, rng)
+
+    get_obs = (get_point_obs if len(channels) == 1 and channels[0].kind == PARETO
+               else _build_get_obs(channels))
+
     cfg = types.SimpleNamespace(
         exp_id=exp_id, T=T, ht=ht, seed=seed, N=N, Lambda=Lambda,
         y_intervals=y_intervals, num1=num1, pi_family=pi_family,
@@ -343,7 +352,8 @@ def _build(module, path):
         M=M, K=K, P=P, t_net_filtering=t_net_filtering, p0=p0, lam=lam,
         Lam=Lam, nets=nets, M_net=M_net, delta=delta, deltas=deltas,
         pi=pi, pi_init=pi_init, C=C, obs_density=obs_density, get_y=get_y,
-        get_obs=get_obs, rng=rng, num_nodes=num_nodes, shared_grid=shared_grid,
+        get_obs=get_obs, get_point_obs=get_point_obs, rng=rng,
+        num_nodes=num_nodes, shared_grid=shared_grid,
         filter_step=filter_step,
         get_continuous_obs=get_continuous_obs,
         continuous_indices=continuous_indices, counting_indices=counting_indices,

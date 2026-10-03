@@ -1,45 +1,38 @@
-"""Гауссовская ЦПТ-аппроксимация канала PARETO с двумя каналами наблюдений.
+"""Гауссовская ЦПТ-аппроксимация PARETO со знакопеременным каналом.
 
-Блок из чётного числа 2n исходных наблюдений ``xi_k`` (шаг ``pareto_obs``,
-``ht=1``) сворачивается в два числа:
+Для чётного B из одной исходной выборки X_i строятся
+    A = sum X_i / B,      Z = sum (-1)^i X_i, i=1..B.
+При постоянном состоянии блока mu=Y1+Y2, v=Y2^2/12:
+    E A=mu, Var A=v/B, E Z=0, Var Z=B*v, Cov(A,Z)=0.
+Произведение независимых нормальных плотностей — ЦПТ-приближение.
+При скачке внутри блока нулевые среднее Z и ковариация уже приближённые;
+блоковое правдоподобие не учитывает такие скачки точно.
 
-    S1 = sum_{k=1}^{2n} xi_k,      S2 = sum_{k=1}^{2n} (-1)^k xi_k.
+Коэффициенты конфига остаются единичными: (mu,v) и (0,v).
+``DiscreteFilter.update`` использует экспозицию 1; ``ht`` влияет только
+на прогноз. Для пары (A,Z) надо копировать C и менять дисперсии:
+    C[..., 0, 1] /= B,    C[..., 1, 1] *= B.
+Средние остаются mu и 0; шаг прогноза равен B * pareto_obs.ht.
 
-При постоянном состоянии ``(theta, Y)`` на блоке ``E xi_k = Y1 + Y2``,
-``Var xi_k = Y2^2/12``, поэтому
+Для прежнего ``Filter`` с парой (sum X_i,Z) и исходным шагом 1
+единичные коэффициенты совместимы с ``ht=B``: прежнее правдоподобие
+умножает и снос, и дисперсию на экспозицию.
 
-    E S1 = 2n (Y1 + Y2),   Var S1 = 2n Y2^2/12,
-    E S2 = 0,              Var S2 = 2n Y2^2/12,
-    Cov(S1, S2) = Y2^2/12 * sum_k (-1)^k = 0.
-
-Знакопеременный канал несёт ту же дисперсию, но нулевое среднее, и не
-коррелирован с первым, так что совместное распределение аппроксимируется
-``N([m, 0], diag(v, v))`` -- произведением двух независимых нормальных
-плотностей, ровно как их перемножает ``make_obs_density``.
-
-``Filter`` умножает снос и дисперсию на переданный ``ht``, поэтому ``drift``
-и ``var`` здесь заданы в единицах ОДНОГО исходного наблюдения: при
-``Filter(..., ht=2n, ...)`` получаются выписанные выше моменты.
-
-Конфиг предназначен только для фильтрации по уже готовым наблюдениям:
-``get_obs`` породил бы два независимых канала, тогда как S2 -- детерминированная
-функция тех же ``xi_k``.
+Конфиг предназначен для фильтрации готовых преобразований одной выборки.
+``get_obs`` породил бы два независимых канала и не строит пару (A,Z).
 """
 import numpy as np
 from numba import njit
 
 from discretized_filter.core.densities import ObsChannel, NORMAL
-from discretized_filter.utils.distributions import pareto_std
 
 exp_id = 'pareto_obs_approx_2ch'
-
-ALPHA = 2.5
 
 two_jumps = False
 
 n_points = 2
 
-# T, ht, seed, N, Lambda, y_intervals, num1 должны совпадать с pareto_obs.py
+# T, seed, N, Lambda, y_intervals, num1 должны совпадать с pareto_obs.py
 # и pareto_obs_approx.py
 T = 24 * 3600
 
@@ -83,12 +76,7 @@ def var_alt(t, y, theta):
     return y[:, 1:2]**2 / 12.0
 
 
-@njit(nogil=True)
-def noise(size):
-    return pareto_std(size, ALPHA)
-
-
 channels = [
-    ObsChannel(kind=NORMAL, drift=drift_sum, var=var_sum, noise=noise),
-    ObsChannel(kind=NORMAL, drift=drift_alt, var=var_alt, noise=noise),
+    ObsChannel(kind=NORMAL, drift=drift_sum, var=var_sum),
+    ObsChannel(kind=NORMAL, drift=drift_alt, var=var_alt),
 ]

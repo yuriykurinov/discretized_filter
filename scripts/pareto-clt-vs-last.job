@@ -1,0 +1,8 @@
+#!/bin/bash
+#SBATCH --cpus-per-task=64
+
+# Суммы наблюдений по ЦПТ против последнего точного наблюдения Парето.
+# Аргументы прокидываются в скрипт:
+#   sbatch scripts/pareto-clt-vs-last.job --ht 10 --hours 3
+cd "${SLURM_SUBMIT_DIR:-.}"
+.venv/bin/python scripts/run_pareto_clt_vs_last.py "$@"

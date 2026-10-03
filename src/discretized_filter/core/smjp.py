@@ -5,6 +5,25 @@ from numba import jit, njit#, prange
 from discretized_filter.utils.distributions import pareto_std
 from discretized_filter.utils.grids import get_moments
 
+
+def make_point_pareto(t_net, loc_fn, scale_fn, alpha_fn, theta, y,
+                      jump_ends, rng):
+    """Наблюдения Парето по состоянию в узлах сетки после t=0."""
+    times = np.asarray(t_net[1:])
+    indices = np.searchsorted(jump_ends, times, side="right")
+    indices = np.minimum(indices, len(theta) - 1)
+    values = np.empty(len(times))
+    for i, (time, index) in enumerate(zip(times, indices)):
+        state = y[index:index + 1]
+        loc = loc_fn(time, state, theta[index])[0, 0]
+        scale = scale_fn(time, state, theta[index])[0, 0]
+        alpha = alpha_fn(time, state, theta[index])[0, 0]
+        mean = alpha / (alpha - 1)
+        std = np.sqrt(alpha / (alpha - 2)) / (alpha - 1)
+        raw = rng.pareto(alpha) + 1
+        values[i] = loc + scale * (1 + (raw - mean) / (std * np.sqrt(12)))
+    return values[:, None]
+
 @njit(fastmath=True)
 def choice(a, p):
     return a[np.searchsorted(np.cumsum(p), np.random.uniform())]
