@@ -1,4 +1,11 @@
-"""ЦПТ-фильтр UNIFORM по средним блоков размера 10."""
+"""Каноническая одноканальная ЦПТ-модель UNIFORM по суммам блоков.
+
+C хранит единичные среднее mu=Y1+Y2 и дисперсию v=Y2**2/12.
+Прежний ``Filter`` масштабирует оба момента экспозицией ht сам.
+Для суммы n точечных наблюдений в ``DiscreteFilter`` оба момента C
+умножают на n явно: среднее n*mu, дисперсия n*v; шаг прогноза равен
+n * uniform_obs.ht. Размер блока по умолчанию — ratio=10.
+"""
 import numpy as np
 from numba import njit
 
@@ -35,12 +42,12 @@ pi_family = 'uniform'
 
 @njit(nogil=True, cache=True)
 def drift(t, y, theta):
-    return (y[:, 0:1] + y[:, 1:2]) / ratio
+    return y[:, 0:1] + y[:, 1:2]
 
 
 @njit(nogil=True, cache=True)
 def var(t, y, theta):
-    return y[:, 1:2]**2 / (12.0 * ratio**2)
+    return y[:, 1:2]**2 / 12.0
 
 
 @njit(nogil=True)

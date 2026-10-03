@@ -1,17 +1,16 @@
 """
-Сравнение трёх фильтров на ОДНОЙ траектории (theta, Y) и ОДНОМ потоке
+Сравнение двух фильтров на ОДНОЙ траектории (theta, Y) и ОДНОМ потоке
 наблюдений -- скриптовый аналог notebooks/pareto_obs.ipynb для длинных
 прогонов (в том числе на кластере).
 
   конфиг              ht   правдоподобие шага                наблюдения
   ------------------- ---- --------------------------------- ---------------------
   pareto_obs           1   точная плотность Y1 + Y2*eps      исходные, шаг 1
-  pareto_obs_approx   10   гауссовская по двум моментам      блоки по 10, сумма
-  pareto_obs_clt      10   то же, по среднему блока          блоки по 10, среднее
+  pareto_obs_clt      10   гауссовская по сумме блока            блоки по 10, сумма
 
 Наблюдения для фильтров с ht=10 НЕ генерируются заново: берутся блоки по
 ratio = 10 из выборки точного конфига (наблюдение -- процесс с приращениями).
-Порядок set_config -- тот же, что в ноутбуке (approx, clt, exact), поэтому
+Порядок set_config -- тот же, что в ноутбуке (clt, exact), поэтому
 поток ГПСЧ и траектория совпадают с ноутбучными.
 
 Оценка theta считается в двух вариантах:
@@ -24,7 +23,7 @@ ratio = 10 из выборки точного конфига (наблюдени
 Запуск:
     .venv/bin/python scripts/run_pareto_comparison.py --hours 3      # пробный
     .venv/bin/python scripts/run_pareto_comparison.py                # весь T
-    .venv/bin/python scripts/run_pareto_comparison.py --filters approx,clt
+    .venv/bin/python scripts/run_pareto_comparison.py --filters clt,exact
 """
 import _bootstrap  # noqa: F401
 
@@ -46,21 +45,18 @@ from discretized_filter.utils.io import save_path
 
 
 EXACT = 'exact'
-APPROX = 'approx'
 CLT = 'clt'
 
 _CONFIG_NAME = {
     EXACT: 'pareto_obs',
-    APPROX: 'pareto_obs_approx',
     CLT: 'pareto_obs_clt',
 }
 _LABEL = {
     EXACT: 'точный, ht=1',
-    APPROX: 'аппрокс. (сумма блока), ht=10',
-    CLT: 'ЦПТ (среднее блока), ht=10',
+    CLT: 'ЦПТ (сумма блока), ht=10',
 }
 
-# параметры, которые обязаны совпадать у всех трёх конфигов
+# параметры, которые обязаны совпадать у обоих конфигов
 _SHARED_SCALARS = ('T', 'seed', 'N', 'M', 'K', 'pi_family', 'n_points',
                    'two_jumps', 'shared_grid')
 _SHARED_ARRAYS = ('Lambda', 'p0', 'delta', 'M_net', 'pi', 'pi_init')
@@ -68,7 +64,7 @@ _SHARED_ARRAYS = ('Lambda', 'p0', 'delta', 'M_net', 'pi', 'pi_init')
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Точный фильтр Парето против гауссовских аппроксимаций.'
+        description='Точный фильтр Парето против ЦПТ по сумме блока.'
     )
     parser.add_argument(
         '--hours', type=float, default=None,
@@ -76,10 +72,10 @@ def parse_args():
              '(по умолчанию -- весь T конфига)',
     )
     parser.add_argument(
-        '--filters', default=f'{APPROX},{CLT},{EXACT}',
+        '--filters', default=f'{CLT},{EXACT}',
         help=f'какие фильтры прогонять, через запятую из '
-             f'{{{EXACT},{APPROX},{CLT}}}; порядок задаёт порядок прогона '
-             '(по умолчанию сначала дешёвые)',
+             f'{{{EXACT},{CLT}}}; порядок задаёт порядок прогона '
+             '(по умолчанию сначала ЦПТ)',
     )
     parser.add_argument(
         '--progress', type=int, default=5000,
@@ -234,23 +230,17 @@ def main():
 
     # порядок загрузки -- как в ноутбуке: точный конфиг активен последним,
     # поэтому траектория порождается его ГПСЧ
-    cfg_approx = set_config(_CONFIG_NAME[APPROX])
     cfg_clt = set_config(_CONFIG_NAME[CLT])
     cfg = set_config(_CONFIG_NAME[EXACT])
-    cfgs = {EXACT: cfg, APPROX: cfg_approx, CLT: cfg_clt}
+    cfgs = {EXACT: cfg, CLT: cfg_clt}
 
     check_configs([(_CONFIG_NAME[k], c) for k, c in cfgs.items()])
 
-    if cfg_clt.ht != cfg_approx.ht:
-        raise ValueError(
-            f'ht конфигов approx ({cfg_approx.ht}) и clt ({cfg_clt.ht}) '
-            'должны совпадать: оба работают на блоках одной длины'
-        )
-    ratio_f = cfg_approx.ht / cfg.ht
+    ratio_f = cfg_clt.ht / cfg.ht
     ratio = int(round(ratio_f))
     if abs(ratio_f - ratio) > 1e-12 or ratio < 1:
         raise ValueError(
-            f'ht approx / ht exact = {ratio_f} не целое: блоки наблюдений '
+            f'ht clt / ht exact = {ratio_f} не целое: блоки наблюдений '
             'не собираются'
         )
 
@@ -279,7 +269,7 @@ def main():
     print(f'скачков theta: {len(t)}, наблюдений (ht={cfg.ht}): '
           f'{obs_full.shape[0]}')
 
-    # длина прогона: выравниваем по границе блока, чтобы все три фильтра
+    # длина прогона: выравниваем по границе блока, чтобы оба фильтра
     # покрывали ровно один и тот же отрезок времени
     n_exact_max = obs_full.shape[0]
     if args.hours is not None:
@@ -294,18 +284,18 @@ def main():
 
     obs = obs_full[:n_exact]
     obs_agg = obs.reshape(n_blocks, ratio, cfg.K).sum(axis=1)
-    obs_mean = obs_agg / ratio
-    observations = {EXACT: obs, APPROX: obs_agg, CLT: obs_mean}
+    obs_clt = obs_agg
+    observations = {EXACT: obs, CLT: obs_clt}
 
     horizon = n_exact * cfg.ht
     print(f'горизонт прогона: {horizon:.0f} ед. времени '
           f'({horizon / 3600:.2f} ч из {cfg.T / 3600:.2f} ч конфига); '
-          f'{n_exact} шагов точного, {n_blocks} шагов приближённых')
+          f'{n_exact} шагов точного, {n_blocks} шагов ЦПТ')
 
     calls = n_exact * cfg.N * n_grid * (cfg.N - 1) * n_grid * cfg.n_points
     print(f'вызовов integrand у точного фильтра: ~{calls:.2e}')
     print('выборка            ht     n        mean        std      max|x|')
-    for key in (EXACT, APPROX, CLT):
+    for key in (EXACT, CLT):
         o = observations[key]
         print(f'{key:<18} {cfgs[key].ht:5.0f} {o.shape[0]:7d} '
               f'{o.mean():11.3f} {o.std():10.3f} {np.abs(o).max():11.3f}')
@@ -324,14 +314,14 @@ def main():
     # --- RMSE на общей сетке ht = ratio * ht_exact
     dtheta = to_discrete(
         np.vstack([np.int64(theta == i) for i in range(cfg.N)]).T,
-        t, cfg.T, cfg_approx.ht,
+        t, cfg.T, cfg_clt.ht,
     )
-    dY = to_discrete(y, t, cfg.T, cfg_approx.ht)
+    dY = to_discrete(y, t, cfg.T, cfg_clt.ht)
     rows = rmse_rows(results, dtheta, dY, ratio)
 
     head = (f'{"фильтр":<32}{"точек":>7}{"RMSE th":>10}{"RMSE th_d":>11}'
             f'{"RMSE Y1":>10}{"RMSE Y2":>10}')
-    lines = ['', f'RMSE на общей сетке ht={cfg_approx.ht:.0f} '
+    lines = ['', f'RMSE на общей сетке ht={cfg_clt.ht:.0f} '
                  '(точный прорежен); th_d -- оценка theta с delta, формула (3.7)',
              head, '-' * len(head)]
     for label, n, rt, rtd, r1, r2 in rows:
@@ -356,28 +346,17 @@ def main():
             f'{np.sqrt(((dY1[:n1, 1] - yy[:n1, 1]) ** 2).mean()):>10.4f}',
         ]
 
-    if APPROX in results and CLT in results:
-        # сумма и среднее блока обязаны совпасть: осреднение -- общий
-        # множитель, сокращающийся при нормировке psi
-        nc = min(results[APPROX][0].shape[0], results[CLT][0].shape[0])
-        d_th = np.abs(results[APPROX][0][:nc] - results[CLT][0][:nc]).max()
-        d_y = np.abs(results[APPROX][2][:nc] - results[CLT][2][:nc]).max()
-        lines += [
-            '',
-            f'сумма против среднего блока: max|dtheta| = {d_th:.3e}, '
-            f'max|dY| = {d_y:.3e}  (ожидается уровень ошибок округления)',
-        ]
-
     summary = '\n'.join(lines)
     print(summary, flush=True)
 
     payload = {
         'theta': theta, 'y': y, 't': t,
-        'obs': obs, 'obs_agg': obs_agg, 'obs_mean': obs_mean,
+        'obs': obs, 'obs_agg': obs_agg, 'obs_clt': obs_clt,
+        'block_statistic': 'sum',
         'ratio': ratio, 'n_exact': n_exact, 'n_blocks': n_blocks,
-        'ht_exact': cfg.ht, 'ht_agg': cfg_approx.ht,
+        'ht_exact': cfg.ht, 'ht_agg': cfg_clt.ht,
         't_net_exact': cfg.t_net_filtering[:n_exact + 1],
-        't_net_agg': cfg_approx.t_net_filtering[:n_blocks + 1],
+        't_net_agg': cfg_clt.t_net_filtering[:n_blocks + 1],
         'delta': cfg.delta,
     }
     for key, (th, thd, yy) in results.items():

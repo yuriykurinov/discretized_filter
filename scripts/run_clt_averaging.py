@@ -1,4 +1,4 @@
-"""Compare three point laws with reset prediction and Gaussian block means.
+"""Compare three point laws with reset prediction and Gaussian block sums.
 
 CLT treats the signal as constant within a block, approximating blocks with jumps.
 """
@@ -56,8 +56,9 @@ def run_filter(cfg, observations, dt, n=None):
     pi = cfg.pi / np.sum(cfg.pi * cfg.delta[:, None], axis=1)[:, None]
     C = cfg.C.copy()
     if n is not None:
-        # Point likelihood has unit exposure: only block-mean variance changes.
-        C[..., 1] /= n
+        # Point likelihood has unit exposure: sum mean and variance scale by n.
+        C[..., 0] *= n
+        C[..., 1] *= n
     filt = DiscreteFilter(
         cfg.p0[:, None] * pi, pi, cfg.M_net, C, cfg.N,
         cfg.Lambda, dt, cfg.delta, cfg.obs_density,
@@ -94,23 +95,24 @@ def main():
     indices = np.minimum(np.searchsorted(jump_ends, t, side='right'), len(regimes) - 1)
     theta, y = regimes[indices], states[indices]
     archive = dict(t=t, theta=theta, y=y, laws=np.array(LAWS),
-                   ns=np.array(args.ns), seed=cfg.seed, Lambda=cfg.Lambda)
+                   ns=np.array(args.ns), seed=cfg.seed, Lambda=cfg.Lambda,
+                   block_statistic='sum')
     streams = np.random.SeedSequence(cfg.seed).spawn(len(LAWS))
     print(f'{steps} point observations per law; horizon={t[-1]:g}s', flush=True)
     print('CLT assumes a constant signal within each block, including blocks crossing jumps.')
     for law, stream in zip(LAWS, streams):
         exact_cfg = set_config(f'{law}_obs')
-        clt_cfg = set_config(f'{law}_obs_approx')
+        clt_cfg = set_config(f'{law}_obs_clt')
         obs = point_observations(law, exact_cfg, y[1:], np.random.default_rng(stream))
         archive[f'obs_{law}'] = obs
         th, yy = run_filter(exact_cfg, obs, cfg.ht)
         archive[f'theta_{law}_exact'], archive[f'y_{law}_exact'] = th, yy
         report(f'{law} exact', th, yy, theta, y, cfg.N)
         for n in args.ns:
-            means = obs.reshape(-1, n, 1).mean(axis=1)
-            th, yy = run_filter(clt_cfg, means, n * cfg.ht, n=n)
+            sums = obs.reshape(-1, n, 1).sum(axis=1)
+            th, yy = run_filter(clt_cfg, sums, n * cfg.ht, n=n)
             archive[f't_n{n}'] = t[::n]
-            archive[f'obs_{law}_n{n}'] = means
+            archive[f'obs_{law}_n{n}'] = sums
             archive[f'theta_{law}_clt_n{n}'] = th
             archive[f'y_{law}_clt_n{n}'] = yy
             report(f'{law} CLT n={n}', th, yy, theta[::n], y[::n], cfg.N)

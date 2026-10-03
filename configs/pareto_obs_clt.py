@@ -1,6 +1,11 @@
-"""Фильтр по среднему блока (ЦПТ-осреднение) вместо суммы блока; ht=10, как в
-``pareto_obs_approx``, но params масштабированы на 1/ratio -- тождественен
-``pareto_obs_approx`` по апостериорному распределению."""
+"""Каноническая одноканальная ЦПТ-модель PARETO по суммам блоков.
+
+C хранит единичные среднее mu=Y1+Y2 и дисперсию v=Y2**2/12.
+Прежний ``Filter`` масштабирует оба момента экспозицией ht сам.
+Для суммы n точечных наблюдений в ``DiscreteFilter`` оба момента C
+умножают на n явно: среднее n*mu, дисперсия n*v; шаг прогноза равен
+n * pareto_obs.ht. Размер блока по умолчанию — ratio=10.
+"""
 import numpy as np
 from numba import njit
 
@@ -12,16 +17,14 @@ exp_id = 'pareto_obs_clt'
 ALPHA = 2.5
 
 # число исходных наблюдений (шаг pareto_obs) на один шаг этого фильтра;
-# замыкается джитованными drift/var ниже, менять после первого вызова
-# этих функций бесполезно (numba вмораживает глобалы при компиляции)
+# моменты задаются на единичный шаг, масштабирование выполняет Filter
 ratio = 10
 
 two_jumps = False
 
 n_points = 2
 
-# T, ht, seed, N, Lambda, y_intervals, num1 должны совпадать с pareto_obs.py
-# и pareto_obs_approx.py
+# T, seed, N, Lambda, y_intervals, num1 должны совпадать с pareto_obs.py
 T = 24 * 3600
 
 ht = 10.0
@@ -44,12 +47,12 @@ pi_family = 'uniform'
 
 @njit(nogil=True, cache=True)
 def drift(t, y, theta):
-    return (y[:, 0:1] + y[:, 1:2]) / ratio
+    return y[:, 0:1] + y[:, 1:2]
 
 
 @njit(nogil=True, cache=True)
 def var(t, y, theta):
-    return y[:, 1:2]**2 / (12.0 * ratio**2)
+    return y[:, 1:2]**2 / 12.0
 
 
 @njit(nogil=True)

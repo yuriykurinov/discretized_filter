@@ -7,12 +7,12 @@
   ------------- ----------------- --------------------- -----  ------
   pareto        pareto_obs        pareto_obs_clt          10     10
   exponential   exponential_obs   exponential_obs_clt      10     10
-  uniform       uniform_obs       uniform_obs_clt           1      1
+  uniform       uniform_obs       uniform_obs_clt          10     10
 
 Траектория генерируется один раз (``sparse_mc``) по конфигу первого из
 выбранных каналов; наблюдения для ЦПТ-фильтра не генерируются заново --
 берутся блоки по ``ratio`` подряд идущих наблюдений точного потока и
-усредняются. Перед генерацией наблюдений каждого канала посев ГПСЧ
+суммируются. Перед генерацией наблюдений каждого канала посев ГПСЧ
 принудительно сбрасывается на общий ``seed`` (``set_seed``), поэтому все три
 канала видят один и тот же поток равномерных величин (common random
 numbers) -- выбор подмножества через ``--channels`` не меняет результат
@@ -146,10 +146,10 @@ def check_configs(named_cfgs):
 
 
 def check_clt_moments(channel, cfg_exact, cfg_clt):
-    """Численно сверяет моменты ЦПТ-конфига с точным (ловит рассогласование
-    ``ratio``/``ht`` внутри ``*_obs_clt.py``: ``ratio`` -- модульная
-    константа, вмороженная в джитованные ``drift``/``var``, наружу через
-    ``cfg`` не выходит). Возвращает вычисленный ``ratio``."""
+    """Сверяет моменты суммы блока с точным конфигом.
+
+    ``Filter`` умножает единичные коэффициенты на ht; сумма ratio точек
+    имеет среднее ratio*mu и дисперсию ratio*v. Возвращает ratio."""
     ratio_f = cfg_clt.ht / cfg_exact.ht
     ratio = int(round(ratio_f))
     if abs(ratio_f - ratio) > 1e-9 or ratio < 1:
@@ -161,8 +161,8 @@ def check_clt_moments(channel, cfg_exact, cfg_clt):
 
     loc = cfg_exact.C[:, :, 0, 0]
     scale = cfg_exact.C[:, :, 0, 1]
-    mu_expected = loc + scale
-    v_expected = scale ** 2 / (12.0 * ratio)
+    mu_expected = ratio * (loc + scale)
+    v_expected = ratio * scale ** 2 / 12.0
     mu_actual = cfg_clt.ht * cfg_clt.C[:, :, 0, 0]
     v_actual = cfg_clt.ht * cfg_clt.C[:, :, 0, 1]
 
@@ -172,7 +172,7 @@ def check_clt_moments(channel, cfg_exact, cfg_clt):
             f'{channel}: снос конфига {_CONFIG_CLT[channel]!r} (ht='
             f'{cfg_clt.ht}) не согласован с точным {_CONFIG_EXACT[channel]!r}'
             f' (ht={cfg_exact.ht}) при ratio={ratio}: max|resid|={resid:.3e};'
-            ' вероятно, в конфиге не совпадают ratio и ht'
+            ' проверьте единичный снос ЦПТ-конфига и ht'
         )
     if not np.allclose(v_actual, v_expected, rtol=1e-10):
         resid = float(np.max(np.abs(v_actual - v_expected)))
@@ -180,7 +180,7 @@ def check_clt_moments(channel, cfg_exact, cfg_clt):
             f'{channel}: дисперсия конфига {_CONFIG_CLT[channel]!r} (ht='
             f'{cfg_clt.ht}) не согласована с точным {_CONFIG_EXACT[channel]!r}'
             f' (ht={cfg_exact.ht}) при ratio={ratio}: max|resid|={resid:.3e};'
-            ' вероятно, в конфиге не совпадают ratio и ht'
+            ' проверьте единичную дисперсию ЦПТ-конфига и ht'
         )
     return ratio
 
@@ -268,7 +268,7 @@ def main():
         named_cfgs.append((_CONFIG_CLT[c], cfgs[c]['clt']))
     check_configs(named_cfgs)
 
-    # 3. сверка моментов ЦПТ-конфига (ловит протухший ratio/ht)
+    # 3. сверка моментов суммы блока ЦПТ-конфига
     ratios = {c: check_clt_moments(c, cfgs[c]['exact'], cfgs[c]['clt'])
               for c in args.order}
 
@@ -331,18 +331,18 @@ def main():
         n_exact = n_blocks * ratio
 
         obs = obs_full[:n_exact]
-        obs_mean = obs.reshape(n_blocks, ratio, K).mean(axis=1)
+        obs_sum = obs.reshape(n_blocks, ratio, K).sum(axis=1)
 
         channel_data[c] = dict(
             cfg_exact=cfg_exact, cfg_clt=cfg_clt, ratio=ratio,
-            obs=obs, obs_mean=obs_mean, n_exact=n_exact, n_blocks=n_blocks,
+            obs=obs, obs_sum=obs_sum, n_exact=n_exact, n_blocks=n_blocks,
         )
 
         print(f'{c + " obs":<25} {cfg_exact.ht:5.0f} {obs.shape[0]:7d} '
               f'{obs.mean():11.3f} {obs.std():10.3f} {np.abs(obs).max():11.3f}')
-        print(f'{c + " obs_mean":<25} {cfg_clt.ht:5.0f} {obs_mean.shape[0]:7d} '
-              f'{obs_mean.mean():11.3f} {obs_mean.std():10.3f} '
-              f'{np.abs(obs_mean).max():11.3f}')
+        print(f'{c + " obs_sum":<25} {cfg_clt.ht:5.0f} {obs_sum.shape[0]:7d} '
+              f'{obs_sum.mean():11.3f} {obs_sum.std():10.3f} '
+              f'{np.abs(obs_sum).max():11.3f}')
 
     # 7. фильтры
     results = {}
@@ -360,7 +360,7 @@ def main():
         )
         th_c, y_c = run_filter(
             f'{c}: ЦПТ, ht={d["cfg_clt"].ht:.0f}', f'{c}_clt', d['cfg_clt'],
-            d['obs_mean'], args.progress, args.checkpoint, out_dir,
+            d['obs_sum'], args.progress, args.checkpoint, out_dir,
         )
         results[c] = dict(theta_est_exact=th_e, y_est_exact=y_e,
                            theta_est_clt=th_c, y_est_clt=y_c)
@@ -422,7 +422,7 @@ def main():
     payload = {
         'theta': theta, 'y': y, 't': t,
         'delta': cfg0.delta, 'T': cfg0.T, 'seed': cfg0.seed, 'N': cfg0.N,
-        'channels': np.array(args.order),
+        'channels': np.array(args.order), 'block_statistic': 'sum',
     }
     for c in args.order:
         d = channel_data[c]
@@ -430,7 +430,7 @@ def main():
         cfg_exact = d['cfg_exact']
         cfg_clt = d['cfg_clt']
         payload[f'obs_{c}'] = d['obs']
-        payload[f'obs_mean_{c}'] = d['obs_mean']
+        payload[f'obs_sum_{c}'] = d['obs_sum']
         payload[f'ratio_{c}'] = d['ratio']
         payload[f'ht_exact_{c}'] = cfg_exact.ht
         payload[f'ht_clt_{c}'] = cfg_clt.ht
