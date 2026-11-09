@@ -17,6 +17,7 @@ POISSON = 1
 PARETO = 2
 EXPONENTIAL = 3
 UNIFORM = 4
+HALF_NORMAL = 5  # |N(0, var)|; наблюдается модуль центрированной суммы
 
 # Число используемых слотов параметров для каждого вида канала.
 _N_PARAMS = {
@@ -25,6 +26,7 @@ _N_PARAMS = {
     PARETO: 3,   # (loc, scale, alpha)
     EXPONENTIAL: 2,  # (loc, scale)
     UNIFORM: 2,      # (loc, scale)
+    HALF_NORMAL: 2,  # (0, дисперсия)
 }
 
 
@@ -35,7 +37,8 @@ def n_params_for(kind):
         raise ValueError(
             f'неизвестный вид канала наблюдения: {kind}; '
             f'доступны NORMAL={NORMAL}, POISSON={POISSON}, PARETO={PARETO}, '
-            f'EXPONENTIAL={EXPONENTIAL}, UNIFORM={UNIFORM}'
+            f'EXPONENTIAL={EXPONENTIAL}, UNIFORM={UNIFORM}, '
+            f'HALF_NORMAL={HALF_NORMAL}'
         )
     return _N_PARAMS[kind]
 
@@ -65,6 +68,15 @@ class ObsChannel:
             if self.drift is None or self.var is None:
                 raise ValueError(
                     'ObsChannel(kind=NORMAL) требует drift и var'
+                )
+        elif kind == HALF_NORMAL:
+            if self.var is None:
+                raise ValueError(
+                    'ObsChannel(kind=HALF_NORMAL) требует var'
+                )
+            if self.drift is not None or self.intensity is not None:
+                raise ValueError(
+                    'ObsChannel(kind=HALF_NORMAL) не использует drift и intensity'
                 )
         elif kind == POISSON:
             if self.intensity is None:
@@ -104,6 +116,14 @@ class ObsChannel:
 def normal_pdf(x, mu, var):
     """Плотность N(mu, var) в точке x."""
     return math.exp(-(x - mu)**2 / (2 * var)) / math.sqrt(2 * math.pi * var)
+
+
+@nb.njit(nb.float64(nb.float64, nb.float64), fastmath=True, cache=True)
+def half_normal_pdf(x, var):
+    """Плотность |N(0, var)| в точке x: 2*phi(x; 0, var) при x >= 0, иначе 0."""
+    if x < 0.0 or var <= 0.0:
+        return 0.0
+    return 2.0 * math.exp(-x * x / (2 * var)) / math.sqrt(2 * math.pi * var)
 
 
 @nb.njit(nb.float64(nb.float64, nb.float64, nb.float64, nb.float64),
@@ -182,6 +202,12 @@ def make_obs_density(kinds):
                     mu += u[r] * comp[r, k, 0]
                     v += u[r] * comp[r, k, 1]
                 res *= normal_pdf(obs[k], mu, v)
+            elif kind == HALF_NORMAL:
+                # дисперсия линейна по u, как у NORMAL (слот 0 не используется)
+                v = 0.0
+                for r in range(n_comp):
+                    v += u[r] * comp[r, k, 1]
+                res *= half_normal_pdf(obs[k], v)
             elif kind == POISSON:
                 lam = 0.0
                 for r in range(n_comp):

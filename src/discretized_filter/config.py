@@ -21,7 +21,7 @@ from discretized_filter.paths import CONFIGS_DIR
 from discretized_filter.utils.grids import set_seed, cartesian_product
 from discretized_filter.utils.distributions import get_pi_family, build_pi
 from discretized_filter.core.densities import (
-    NORMAL, POISSON, PARETO, EXPONENTIAL, UNIFORM,
+    NORMAL, POISSON, PARETO, EXPONENTIAL, UNIFORM, HALF_NORMAL,
     n_params_for, make_obs_density,
 )
 from discretized_filter.core.filter import filter_step as generic_filter_step
@@ -113,6 +113,13 @@ def _build_get_obs(channels):
     Приращения складываются в столбцы результата в порядке channels,
     с отбрасыванием индекса 0 (момент t=0, приращение всегда 0).
     """
+    if any(ch.kind == HALF_NORMAL for ch in channels):
+        def get_obs_unsupported(t_net_filtering, theta, y, t):
+            raise ValueError(
+                'HALF_NORMAL задаёт только плотность фильтра; '
+                'порождающий процесс get_obs для него не определён'
+            )
+        return get_obs_unsupported
     std_fns = tuple(
         _make_std_fn(ch.var) if (ch.intensity is None and ch.loc is None) else None
         for ch in channels
@@ -264,6 +271,9 @@ def _build(module, path):
             if ch.kind == NORMAL:
                 C[n, :, k, 0] = ch.drift(-1, M_net[n], n)[:, 0]
                 C[n, :, k, 1] = ch.var(-1, M_net[n], n)[:, 0]
+            elif ch.kind == HALF_NORMAL:
+                C[n, :, k, 0] = 0.0
+                C[n, :, k, 1] = ch.var(-1, M_net[n], n)[:, 0]
             elif ch.kind == POISSON:
                 C[n, :, k, 0] = ch.intensity(-1, M_net[n], n)[:, 0]
             elif ch.kind == PARETO:
@@ -281,12 +291,13 @@ def _build(module, path):
     # только там, где pi > 0: zero_jump_kernel вычисляется для каждого узла
     # безусловно, а 0.0 * NaN == NaN.
     for k, ch in enumerate(channels):
-        if ch.kind == NORMAL:
+        if ch.kind in (NORMAL, HALF_NORMAL):
             bad = ~(C[:, :, k, 1] > 0)
             if np.any(bad):
                 n_bad = int(bad.sum())
+                name = 'NORMAL' if ch.kind == NORMAL else 'HALF_NORMAL'
                 raise AssertionError(
-                    f'канал {k} (NORMAL): дисперсия <= 0 в {n_bad} узлах сетки '
+                    f'канал {k} ({name}): дисперсия <= 0 в {n_bad} узлах сетки '
                     f'(из {bad.size}); normal_pdf не защищена от нулевой '
                     'дисперсии и даст NaN'
                 )
