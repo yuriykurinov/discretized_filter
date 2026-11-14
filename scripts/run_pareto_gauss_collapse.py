@@ -52,7 +52,12 @@ def parse_args(argv=None):
     parser.add_argument('--sigma-factor', type=float, nargs=2, metavar=('S1', 'S2'),
                         default=(SIGMA_FACTOR, SIGMA_FACTOR),
                         help='sigma_k = S_k * h_k гауссовой подстановки для Y1, Y2')
+    parser.add_argument('--debug-every', type=int, default=0, metavar='K',
+                        help='отладочные снимки маргиналов каждые K исходных наблюдений '
+                        '(и на шаге 0) в debug_{метод}.npz; 0 -- выключено')
     args = parser.parse_args(argv)
+    if args.debug_every < 0:
+        parser.error('--debug-every должен быть неотрицательным')
     args.methods = [m for m in METHODS if m in set(args.methods)]
     if not all(np.isfinite(v) and v > 0 for v in args.sigma_factor):
         parser.error('--sigma-factor: оба значения должны быть конечными и положительными')
@@ -129,7 +134,7 @@ def uniform_respread(psi, delta, tol):
 
 
 def run_filter(label, cfg, observations, block_size, snap_windows, progress,
-               checkpoint, out_dir, respread, tol):
+               checkpoint, out_dir, respread, tol, debug_every=0):
     """Прогноз, коррекция и (если respread задан) замена при схлопывании.
 
     respread -- None (exact) или функция (psi, delta, tol) -> (new_psi или None, info).
@@ -137,7 +142,8 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
     Оценки и снимки psi берутся на концах окон (B наблюдений) после замены.
     Возвращает theta_est, y_est, failure, snaps, max_mass (n_windows+1, NaN после
     останова), reset_steps, first_collapse_step (первый шаг, на котором выполнен
-    критерий; для методов с заменой совпадает с первой заменой).
+    критерий; для методов с заменой совпадает с первой заменой), debug (словарь списков
+    снимков маргиналов на шагах, кратных debug_every, и на шаге 0; пуст при debug_every=0).
     """
     pi = cfg.pi / np.sum(cfg.pi * cfg.delta[:, None], axis=1)[:, None]
     filt = DiscreteFilter(cfg.p0[:, None] * pi, pi, cfg.M_net, cfg.C,
@@ -146,6 +152,20 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
     theta_est, y_est = [th0], [y0]
     max_mass = [float((filt.psi * filt.delta[:, None]).max())]
     snaps, resets = {}, []
+    debug = {}
+
+    def debug_snapshot(step):
+        marg = compute_marginals(filt.psi, filt.delta, cfg.nets)
+        mass = filt.psi * filt.delta[:, None]
+        n, j = np.unravel_index(np.argmax(mass), mass.shape)
+        for key, value in (('step', step), ('marg_theta', marg['theta']),
+                           ('marg_y1', marg['y1']), ('marg_y2', marg['y2']),
+                           ('max_mass', mass[n, j]), ('argmax_n', n), ('argmax_j', j),
+                           ('n_cells_gt_1e-12', int((mass > 1e-12).sum()))):
+            debug.setdefault(key, []).append(value)
+
+    if debug_every:
+        debug_snapshot(0)
     first_collapse = -1
     failure = ''
     start = monotonic()
@@ -179,6 +199,8 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
             max_mass.append(float((filt.psi * filt.delta[:, None]).max()))
             if window in snap_windows:
                 snaps[window] = filt.psi.copy()
+        if debug_every and step % debug_every == 0:
+            debug_snapshot(step)
         if progress and step % progress == 0:
             print(f'[{label}] {step}/{total}; {monotonic() - start:.1f} с; '
                   f'замен: {len(resets)}', flush=True)
@@ -189,7 +211,7 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
                      max_mass=np.array(max_mass), reset_steps=np.array(resets, dtype=int))
     print(f'[{label}] завершено {len(theta_est) - 1} окон; замен: {len(resets)}', flush=True)
     return (np.array(theta_est), np.array(y_est), failure, snaps,
-            np.array(max_mass), np.array(resets, dtype=int), first_collapse)
+            np.array(max_mass), np.array(resets, dtype=int), first_collapse, debug)
 
 
 def main():
@@ -228,7 +250,7 @@ def main():
                    n_raw=n_raw, n_blocks=n_blocks,
                    density_time=times[snap_windows],
                    density_windows=np.array(snap_windows),
-                   collapse_tol=args.collapse_tol, sigma_factor=np.array(args.sigma_factor, dtype=float),
+                   collapse_tol=args.collapse_tol, debug_every=args.debug_every, sigma_factor=np.array(args.sigma_factor, dtype=float),
                    config_name_pareto_raw=cfg._config_name,
                    config_source_pareto_raw=source,
                    seed_spawn_key_pareto=np.array(stream.spawn_key),
@@ -251,12 +273,20 @@ def main():
              f'Окон: {n_blocks}; горизонт: {times[-1]:g} с; снимки на окнах {snap_windows}.',
              f'B={B}, seed={args.seed}.',
              'канал метод точек RMSE_theta RMSE_Y1 RMSE_Y2']
+    grid = compute_marginals(cfg.pi, cfg.delta, cfg.nets)
+    nodes_y1, nodes_y2 = grid['nodes_y1'], grid['nodes_y2']
     complete = True
     results = {}
     for method in args.methods:
-        th, yy, failure, snaps, mm, resets, first = run_filter(
+        th, yy, failure, snaps, mm, resets, first, debug = run_filter(
             f'{LAW}_{method}', cfg, obs, B, set(snap_windows), args.progress,
-            args.checkpoint, out_dir, respreads[method], args.collapse_tol)
+            args.checkpoint, out_dir, respreads[method], args.collapse_tol,
+            args.debug_every)
+        if args.debug_every:
+            np.savez(out_dir / f'debug_{method}.npz',
+                     **{k: np.array(v) for k, v in debug.items()},
+                     nodes_y1=nodes_y1, nodes_y2=nodes_y2, y_true=args.y_true,
+                     theta_true=args.theta, raw_ht=cfg.ht, K=args.debug_every)
         results[method] = th, yy
         done = len(th) - 1
         mm_full = np.full(n_blocks + 1, np.nan)
