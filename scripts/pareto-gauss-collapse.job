@@ -1,0 +1,5 @@
+#!/bin/bash
+#SBATCH --cpus-per-task=64
+
+cd "${SLURM_SUBMIT_DIR:-.}"
+.venv/bin/python scripts/run_pareto_gauss_collapse.py "$@"
