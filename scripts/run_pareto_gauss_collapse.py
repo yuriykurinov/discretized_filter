@@ -1,8 +1,9 @@
-"""Pareto, постоянный сигнал: точный фильтр и точный фильтр с гауссовым размазыванием.
+"""Pareto, постоянный сигнал: точный фильтр и два его варианта с размазыванием.
 
-Методы: exact (без изменений) и exact_gauss (после каждой коррекции, если апостериорная
-масса схлопнулась в одну ячейку сетки, psi заменяется дискретизованным гауссианом).
-Оба метода работают по исходным наблюдениям, окно = B наблюдений, без масштабирования C.
+Методы: exact (без изменений), exact_gauss (после каждой коррекции, если апостериорная
+масса схлопнулась в одну ячейку сетки, psi заменяется дискретизованным гауссианом) и
+exact_uniform (то же, но замена -- равномерная плотность на сетке состояния n*).
+Все методы работают по исходным наблюдениям, окно = B наблюдений, без масштабирования C.
 План: plans/20261113-pareto-gauss-collapse.md.
 """
 import _bootstrap  # noqa: F401
@@ -23,7 +24,7 @@ from run_channel_clt_split_comparison import common_rmse, check_configs
 from run_clt_averaging import point_observations
 
 LAW = 'pareto'
-METHODS = ('exact', 'exact_gauss')
+METHODS = ('exact', 'exact_gauss', 'exact_uniform')
 SIGMA_FACTOR = 2 / 3
 
 
@@ -43,7 +44,12 @@ def parse_args(argv=None):
     parser.add_argument('--exp-id', default='pareto_gauss_collapse')
     parser.add_argument('--collapse-tol', type=float, default=1e-10,
                         help='схлопывание: максимальная масса ячейки >= 1 - tol')
+    parser.add_argument('--sigma-factor', type=float, nargs=2, metavar=('S1', 'S2'),
+                        default=(SIGMA_FACTOR, SIGMA_FACTOR),
+                        help='sigma_k = S_k * h_k гауссовой подстановки для Y1, Y2')
     args = parser.parse_args(argv)
+    if not all(np.isfinite(v) and v > 0 for v in args.sigma_factor):
+        parser.error('--sigma-factor: оба значения должны быть конечными и положительными')
     if args.block_size < 4 or args.block_size % 4:
         parser.error('--block-size должен быть положительным числом, кратным 4')
     if not np.isfinite(args.hours) or args.hours <= 0:
@@ -80,7 +86,8 @@ def gaussian_respread(psi, delta, M_net, nets, tol, sigma_factor=SIGMA_FACTOR):
     """Замена схлопнувшегося psi дискретизованным гауссианом.
 
     Схлопывание: max_{n,j} psi[n, j] * delta[n] >= 1 - tol. Тогда узел c = M_net[n*, j*],
-    sigma_k = sigma_factor * h_k (шаг сетки состояния n*), координаты независимы,
+    sigma_k = sigma_factor[k] * h_k (шаг сетки состояния n*), координаты независимы;
+    sigma_factor -- скаляр (одинаков для обеих координат) или последовательность длины 2,
     psi_new[n*, j] = g[j] / (delta[n*] * sum g), в остальных состояниях 0.
     Возвращает (new_psi или None, info); info -- словарь с n, j, max_mass, c, sigma.
     """
@@ -89,7 +96,8 @@ def gaussian_respread(psi, delta, M_net, nets, tol, sigma_factor=SIGMA_FACTOR):
     if not collapsed:
         return None, info
     c = M_net[n, j]
-    sigma = np.array([sigma_factor * (nets[n][k][1] - nets[n][k][0]) for k in range(2)])
+    sf = np.broadcast_to(np.asarray(sigma_factor, dtype=float), (2,))
+    sigma = np.array([sf[k] * (nets[n][k][1] - nets[n][k][0]) for k in range(2)])
     g = np.exp(-(M_net[n, :, 0] - c[0]) ** 2 / (2 * sigma[0] ** 2)
                - (M_net[n, :, 1] - c[1]) ** 2 / (2 * sigma[1] ** 2))
     new_psi = np.zeros_like(psi)
@@ -98,14 +106,32 @@ def gaussian_respread(psi, delta, M_net, nets, tol, sigma_factor=SIGMA_FACTOR):
     return new_psi, info
 
 
+def uniform_respread(psi, delta, tol):
+    """Замена схлопнувшегося psi равномерной плотностью на сетке состояния n*.
+
+    Критерий схлопывания тот же, что в gaussian_respread. Тогда
+    psi_new[n*, :] = 1 / (delta[n*] * J), J = число узлов сетки, в остальных состояниях 0.
+    Возвращает (new_psi или None, info); info -- словарь с n, j, max_mass.
+    """
+    n, j, top, collapsed = collapse_cell(psi, delta, tol)
+    info = dict(collapsed=collapsed, n=n, j=j, max_mass=top)
+    if not collapsed:
+        return None, info
+    new_psi = np.zeros_like(psi)
+    new_psi[n] = 1.0 / (delta[n] * psi.shape[1])
+    return new_psi, info
+
+
 def run_filter(label, cfg, observations, block_size, snap_windows, progress,
-               checkpoint, out_dir, gauss, tol):
-    """Прогноз, коррекция и (для gauss) замена при схлопывании.
+               checkpoint, out_dir, respread, tol):
+    """Прогноз, коррекция и (если respread задан) замена при схлопывании.
+
+    respread -- None (exact) или функция (psi, delta, tol) -> (new_psi или None, info).
 
     Оценки и снимки psi берутся на концах окон (B наблюдений) после замены.
     Возвращает theta_est, y_est, failure, snaps, max_mass (n_windows+1, NaN после
     останова), reset_steps, first_collapse_step (первый шаг, на котором выполнен
-    критерий; для gauss совпадает с первой заменой).
+    критерий; для методов с заменой совпадает с первой заменой).
     """
     pi = cfg.pi / np.sum(cfg.pi * cfg.delta[:, None], axis=1)[:, None]
     filt = DiscreteFilter(cfg.p0[:, None] * pi, pi, cfg.M_net, cfg.C,
@@ -123,9 +149,8 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
         try:
             filt.predict()
             filt.update(obs)
-            if gauss:
-                new_psi, info = gaussian_respread(filt.psi, filt.delta, cfg.M_net,
-                                                  cfg.nets, tol)
+            if respread is not None:
+                new_psi, info = respread(filt.psi, filt.delta, tol)
                 if new_psi is not None:
                     filt.psi = new_psi
                     resets.append(step)
@@ -197,15 +222,24 @@ def main():
                    n_raw=n_raw, n_blocks=n_blocks,
                    density_time=times[snap_windows],
                    density_windows=np.array(snap_windows),
-                   collapse_tol=args.collapse_tol, sigma_factor=SIGMA_FACTOR,
+                   collapse_tol=args.collapse_tol, sigma_factor=np.array(args.sigma_factor, dtype=float),
                    config_name_pareto_raw=cfg._config_name,
                    config_source_pareto_raw=source,
                    seed_spawn_key_pareto=np.array(stream.spawn_key),
                    obs_pareto=obs)
+    respreads = {
+        'exact': None,
+        'exact_gauss': lambda psi, delta, tol: gaussian_respread(
+            psi, delta, cfg.M_net, cfg.nets, tol, args.sigma_factor),
+        'exact_uniform': uniform_respread,
+    }
     lines = ['Фильтр: DiscreteFilter (predict, update) по исходным наблюдениям, '
              'окно = B наблюдений, C без масштабирования.',
              f'exact_gauss: замена на гауссиан при max массе ячейки >= 1 - '
-             f'{args.collapse_tol:g}, sigma = {SIGMA_FACTOR:.4f} * h.',
+             f'{args.collapse_tol:g}, sigma = ({args.sigma_factor[0]:.4f}, '
+             f'{args.sigma_factor[1]:.4f}) * h.',
+             f'exact_uniform: замена на равномерную плотность на сетке состояния n* '
+             f'при том же критерии.',
              'RMSE на общих завершённых концах окон; начальная точка исключена.',
              f'Постоянный сигнал: theta={args.theta}, Y={args.y_true.tolist()}.',
              f'Окон: {n_blocks}; горизонт: {times[-1]:g} с; снимки на окнах {snap_windows}.',
@@ -216,7 +250,7 @@ def main():
     for method in METHODS:
         th, yy, failure, snaps, mm, resets, first = run_filter(
             f'{LAW}_{method}', cfg, obs, B, set(snap_windows), args.progress,
-            args.checkpoint, out_dir, method == 'exact_gauss', args.collapse_tol)
+            args.checkpoint, out_dir, respreads[method], args.collapse_tol)
         results[method] = th, yy
         done = len(th) - 1
         mm_full = np.full(n_blocks + 1, np.nan)
@@ -230,8 +264,8 @@ def main():
         if method == 'exact':
             payload['first_collapse_step_exact'] = first
         else:
-            payload['reset_steps_exact_gauss'] = resets
-            payload['n_resets_exact_gauss'] = len(resets)
+            payload[f'reset_steps_{method}'] = resets
+            payload[f'n_resets_{method}'] = len(resets)
         complete = complete and done == n_blocks
         lines.append(f'Статус {LAW}/{method}: {done}/{n_blocks} окон')
         shapes = compute_marginals(cfg.pi, cfg.delta, cfg.nets)
@@ -247,7 +281,8 @@ def main():
         payload['nodes_y1'] = shapes['nodes_y1']
         payload['nodes_y2'] = shapes['nodes_y2']
     lines.append(f'exact: первое схлопывание на шаге {payload["first_collapse_step_exact"]}; '
-                 f'exact_gauss: замен {payload["n_resets_exact_gauss"]}')
+                 f'exact_gauss: замен {payload["n_resets_exact_gauss"]}; '
+                 f'exact_uniform: замен {payload["n_resets_exact_uniform"]}')
     count, scores = common_rmse(results, theta_true, y_true)
     payload[f'rmse_count_{LAW}'] = count
     for method, score in scores.items():
