@@ -4,6 +4,8 @@
 масса схлопнулась в одну ячейку сетки, psi заменяется дискретизованным гауссианом) и
 exact_uniform (то же, но замена -- равномерная плотность на сетке состояния n*).
 Все методы работают по исходным наблюдениям, окно = B наблюдений, без масштабирования C.
+Опция --methods выбирает подмножество методов (по умолчанию все три); запускаются только
+выбранные, в каноническом порядке METHODS.
 План: plans/20261113-pareto-gauss-collapse.md.
 """
 import _bootstrap  # noqa: F401
@@ -44,10 +46,14 @@ def parse_args(argv=None):
     parser.add_argument('--exp-id', default='pareto_gauss_collapse')
     parser.add_argument('--collapse-tol', type=float, default=1e-10,
                         help='схлопывание: максимальная масса ячейки >= 1 - tol')
+    parser.add_argument('--methods', nargs='+', choices=METHODS, default=list(METHODS),
+                        help='подмножество методов для запуска (по умолчанию все); '
+                        'повторы убираются, порядок канонический')
     parser.add_argument('--sigma-factor', type=float, nargs=2, metavar=('S1', 'S2'),
                         default=(SIGMA_FACTOR, SIGMA_FACTOR),
                         help='sigma_k = S_k * h_k гауссовой подстановки для Y1, Y2')
     args = parser.parse_args(argv)
+    args.methods = [m for m in METHODS if m in set(args.methods)]
     if not all(np.isfinite(v) and v > 0 for v in args.sigma_factor):
         parser.error('--sigma-factor: оба значения должны быть конечными и положительными')
     if args.block_size < 4 or args.block_size % 4:
@@ -216,7 +222,7 @@ def main():
                    times=times, raw_times=raw_times, N=cfg.N, T=cfg.T,
                    seed=args.seed, delta=cfg.delta, filter_engine='DiscreteFilter',
                    observation_generator='run_clt_averaging.point_observations',
-                   channels=np.array([LAW]), methods=np.array(METHODS),
+                   channels=np.array([LAW]), methods=np.array(args.methods),
                    block_size=B, raw_ht=cfg.ht, filter_ht=B * cfg.ht,
                    requested_hours=args.hours, effective_horizon=times[-1],
                    n_raw=n_raw, n_blocks=n_blocks,
@@ -247,7 +253,7 @@ def main():
              'канал метод точек RMSE_theta RMSE_Y1 RMSE_Y2']
     complete = True
     results = {}
-    for method in METHODS:
+    for method in args.methods:
         th, yy, failure, snaps, mm, resets, first = run_filter(
             f'{LAW}_{method}', cfg, obs, B, set(snap_windows), args.progress,
             args.checkpoint, out_dir, respreads[method], args.collapse_tol)
@@ -280,9 +286,13 @@ def main():
             payload[f'{nm}_{LAW}_{method}'] = stacks[k]
         payload['nodes_y1'] = shapes['nodes_y1']
         payload['nodes_y2'] = shapes['nodes_y2']
-    lines.append(f'exact: первое схлопывание на шаге {payload["first_collapse_step_exact"]}; '
-                 f'exact_gauss: замен {payload["n_resets_exact_gauss"]}; '
-                 f'exact_uniform: замен {payload["n_resets_exact_uniform"]}')
+    parts = []
+    if 'exact' in args.methods:
+        parts.append(f'exact: первое схлопывание на шаге {payload["first_collapse_step_exact"]}')
+    parts += [f'{m}: замен {payload[f"n_resets_{m}"]}'
+              for m in args.methods if m != 'exact']
+    if parts:
+        lines.append('; '.join(parts))
     count, scores = common_rmse(results, theta_true, y_true)
     payload[f'rmse_count_{LAW}'] = count
     for method, score in scores.items():
