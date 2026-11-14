@@ -1,10 +1,15 @@
-"""Pareto, постоянный сигнал: точный фильтр и два его варианта с размазыванием.
+"""Pareto, постоянный сигнал: точный фильтр, два его варианта с размазыванием и ЦПТ-фильтр.
 
 Методы: exact (без изменений), exact_gauss (после каждой коррекции, если апостериорная
 масса схлопнулась в одну ячейку сетки, psi заменяется дискретизованным гауссианом) и
 exact_uniform (то же, но замена -- равномерная плотность на сетке состояния n*).
-Все методы работают по исходным наблюдениям, окно = B наблюдений, без масштабирования C.
-Опция --methods выбирает подмножество методов (по умолчанию все три); запускаются только
+Эти три метода работают по исходным наблюдениям, окно = B наблюдений, без масштабирования C.
+odd_abs_2ch -- ЦПТ-фильтр с каналами NORMAL(B*mu/2, B*v/2) и HALF_NORMAL(B*v/2) по
+агрегатам окон aggregate(obs, B)['odd_abs_2ch'] тех же исходных наблюдений: один прогноз и
+одна коррекция на окно, C[..., :2] умножены на B один раз, ht = B * raw_ht, без замен.
+Конфиг const2s_pareto_clt_odd_abs_2ch загружается только если метод выбран. Для него
+first_collapse_step_odd_abs_2ch и шаги отладочных снимков даны в исходных шагах (окно * B).
+Опция --methods выбирает подмножество методов (по умолчанию все четыре); запускаются только
 выбранные, в каноническом порядке METHODS.
 План: plans/20261113-pareto-gauss-collapse.md.
 """
@@ -22,11 +27,14 @@ from run_channel_clt_comparison import CHANNELS
 from run_channel_clt_constant import (
     Y1_INTERVALS, Y2_INTERVALS, resolve_truth, n_windows, compute_marginals,
 )
-from run_channel_clt_split_comparison import common_rmse, check_configs
+from run_channel_clt_split_comparison import (
+    aggregate, check_moments, common_rmse, check_configs,
+)
 from run_clt_averaging import point_observations
 
 LAW = 'pareto'
-METHODS = ('exact', 'exact_gauss', 'exact_uniform')
+METHODS = ('exact', 'exact_gauss', 'exact_uniform', 'odd_abs_2ch')
+CLT_METHOD = 'odd_abs_2ch'
 SIGMA_FACTOR = 2 / 3
 
 
@@ -134,10 +142,14 @@ def uniform_respread(psi, delta, tol):
 
 
 def run_filter(label, cfg, observations, block_size, snap_windows, progress,
-               checkpoint, out_dir, respread, tol, debug_every=0):
+               checkpoint, out_dir, respread, tol, debug_every=0, clt=False):
     """Прогноз, коррекция и (если respread задан) замена при схлопывании.
 
     respread -- None (exact) или функция (psi, delta, tol) -> (new_psi или None, info).
+    clt=True: observations -- агрегаты окон (одно наблюдение = окно = B исходных шагов),
+    C[..., :2] умножаются на block_size один раз; шаги first_collapse, отладочных снимков
+    и замен выражаются в исходных шагах (окно * block_size); progress/checkpoint,
+    заданные в исходных шагах, пересчитываются в окна. Только без замен (respread=None).
 
     Оценки и снимки psi берутся на концах окон (B наблюдений) после замены.
     Возвращает theta_est, y_est, failure, snaps, max_mass (n_windows+1, NaN после
@@ -146,7 +158,16 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
     снимков маргиналов на шагах, кратных debug_every, и на шаге 0; пуст при debug_every=0).
     """
     pi = cfg.pi / np.sum(cfg.pi * cfg.delta[:, None], axis=1)[:, None]
-    filt = DiscreteFilter(cfg.p0[:, None] * pi, pi, cfg.M_net, cfg.C,
+    coefficients = cfg.C
+    if clt:
+        coefficients = cfg.C.copy()
+        coefficients[..., :2] *= block_size
+        window_step, scale = 1, block_size
+        progress = max(1, progress // block_size) if progress else 0
+        checkpoint = max(1, checkpoint // block_size) if checkpoint else 0
+    else:
+        window_step, scale = block_size, 1
+    filt = DiscreteFilter(cfg.p0[:, None] * pi, pi, cfg.M_net, coefficients,
                           cfg.N, cfg.Lambda, cfg.ht, cfg.delta, cfg.obs_density)
     th0, y0 = filt.estimate()
     theta_est, y_est = [th0], [y0]
@@ -179,12 +200,12 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
                 new_psi, info = respread(filt.psi, filt.delta, tol)
                 if new_psi is not None:
                     filt.psi = new_psi
-                    resets.append(step)
+                    resets.append(step * scale)
             else:
                 info = dict(collapsed=collapse_cell(filt.psi, filt.delta, tol)[3])
             if info['collapsed'] and first_collapse < 0:
-                first_collapse = step
-            if step % block_size == 0:
+                first_collapse = step * scale
+            if step % window_step == 0:
                 th, yy = filt.estimate()
                 if not np.all(np.isfinite(th)) or not np.all(np.isfinite(yy)):
                     raise FloatingPointError('Оценки содержат nan/inf')
@@ -192,15 +213,15 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
             failure = f'{type(exc).__name__}: {exc}'
             print(f'[{label}] ОСТАНОВ на шаге {step}: {failure}', flush=True)
             break
-        if step % block_size == 0:
-            window = step // block_size
+        if step % window_step == 0:
+            window = step // window_step
             theta_est.append(th)
             y_est.append(yy)
             max_mass.append(float((filt.psi * filt.delta[:, None]).max()))
             if window in snap_windows:
                 snaps[window] = filt.psi.copy()
-        if debug_every and step % debug_every == 0:
-            debug_snapshot(step)
+        if debug_every and (step * scale) % debug_every == 0:
+            debug_snapshot(step * scale)
         if progress and step % progress == 0:
             print(f'[{label}] {step}/{total}; {monotonic() - start:.1f} с; '
                   f'замен: {len(resets)}', flush=True)
@@ -220,6 +241,13 @@ def main():
     name = f'const2s_{LAW}_exact'
     cfg = set_config(name)
     check_configs([(name, cfg)])
+    use_clt = CLT_METHOD in args.methods
+    if use_clt:
+        clt_name = f'const2s_{LAW}_clt_odd_abs_2ch'
+        clt_cfg = set_config(clt_name)
+        clt_cfg.ht = B * cfg.ht
+        check_moments(cfg, {CLT_METHOD: clt_cfg}, B)
+        check_configs([(name, cfg), (clt_name, clt_cfg)])
     if (not np.array_equal(cfg.y_intervals[0], Y1_INTERVALS)
             or not np.array_equal(cfg.y_intervals[1], Y2_INTERVALS)):
         raise ValueError('Y1_INTERVALS/Y2_INTERVALS не совпадают с конфигом')
@@ -236,6 +264,9 @@ def main():
     stream = streams[LAW]
     source = cfg._config_path.read_text(encoding='utf-8')
     (out_dir / f'config_{LAW}_raw.py').write_text(source, encoding='utf-8')
+    if use_clt:
+        clt_source = clt_cfg._config_path.read_text(encoding='utf-8')
+        (out_dir / f'config_{LAW}_{CLT_METHOD}.py').write_text(clt_source, encoding='utf-8')
     obs = point_observations(LAW, cfg, y_raw, np.random.default_rng(stream))
     if obs.shape != (n_raw, 1):
         raise ValueError(f'{LAW}: неверная форма исходных наблюдений {obs.shape}')
@@ -255,11 +286,17 @@ def main():
                    config_source_pareto_raw=source,
                    seed_spawn_key_pareto=np.array(stream.spawn_key),
                    obs_pareto=obs)
+    if use_clt:
+        inputs_clt = aggregate(obs, B)[CLT_METHOD]
+        payload.update({f'obs_{LAW}_{CLT_METHOD}': inputs_clt,
+                        f'config_name_{LAW}_{CLT_METHOD}': clt_cfg._config_name,
+                        f'config_source_{LAW}_{CLT_METHOD}': clt_source})
     respreads = {
         'exact': None,
         'exact_gauss': lambda psi, delta, tol: gaussian_respread(
             psi, delta, cfg.M_net, cfg.nets, tol, args.sigma_factor),
         'exact_uniform': uniform_respread,
+        CLT_METHOD: None,
     }
     lines = ['Фильтр: DiscreteFilter (predict, update) по исходным наблюдениям, '
              'окно = B наблюдений, C без масштабирования.',
@@ -268,6 +305,8 @@ def main():
              f'{args.sigma_factor[1]:.4f}) * h.',
              f'exact_uniform: замена на равномерную плотность на сетке состояния n* '
              f'при том же критерии.',
+             f'{CLT_METHOD}: ЦПТ-фильтр (NORMAL + HALF_NORMAL) по агрегатам окон, '
+             f'один шаг на окно, C[..., :2] * B, ht = B * raw_ht, без замен.',
              'RMSE на общих завершённых концах окон; начальная точка исключена.',
              f'Постоянный сигнал: theta={args.theta}, Y={args.y_true.tolist()}.',
              f'Окон: {n_blocks}; горизонт: {times[-1]:g} с; снимки на окнах {snap_windows}.',
@@ -278,10 +317,12 @@ def main():
     complete = True
     results = {}
     for method in args.methods:
+        is_clt = method == CLT_METHOD
+        mcfg = clt_cfg if is_clt else cfg
         th, yy, failure, snaps, mm, resets, first, debug = run_filter(
-            f'{LAW}_{method}', cfg, obs, B, set(snap_windows), args.progress,
-            args.checkpoint, out_dir, respreads[method], args.collapse_tol,
-            args.debug_every)
+            f'{LAW}_{method}', mcfg, inputs_clt if is_clt else obs, B,
+            set(snap_windows), args.progress, args.checkpoint, out_dir,
+            respreads[method], args.collapse_tol, args.debug_every, clt=is_clt)
         if args.debug_every:
             np.savez(out_dir / f'debug_{method}.npz',
                      **{k: np.array(v) for k, v in debug.items()},
@@ -297,8 +338,8 @@ def main():
                         f'completed_windows_{LAW}_{method}': done,
                         f'complete_{LAW}_{method}': done == n_blocks,
                         f'max_mass_{method}': mm_full})
-        if method == 'exact':
-            payload['first_collapse_step_exact'] = first
+        if method in ('exact', CLT_METHOD):
+            payload[f'first_collapse_step_{method}'] = first
         else:
             payload[f'reset_steps_{method}'] = resets
             payload[f'n_resets_{method}'] = len(resets)
@@ -317,10 +358,12 @@ def main():
         payload['nodes_y1'] = shapes['nodes_y1']
         payload['nodes_y2'] = shapes['nodes_y2']
     parts = []
-    if 'exact' in args.methods:
-        parts.append(f'exact: первое схлопывание на шаге {payload["first_collapse_step_exact"]}')
-    parts += [f'{m}: замен {payload[f"n_resets_{m}"]}'
-              for m in args.methods if m != 'exact']
+    for m in args.methods:
+        if m in ('exact', CLT_METHOD):
+            parts.append(f'{m}: первое схлопывание на шаге '
+                         f'{payload[f"first_collapse_step_{m}"]}')
+        else:
+            parts.append(f'{m}: замен {payload[f"n_resets_{m}"]}')
     if parts:
         lines.append('; '.join(parts))
     count, scores = common_rmse(results, theta_true, y_true)
