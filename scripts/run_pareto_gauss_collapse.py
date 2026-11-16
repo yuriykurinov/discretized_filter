@@ -6,7 +6,11 @@ exact_uniform (то же, но замена -- равномерная плотн
 Эти три метода работают по исходным наблюдениям, окно = B наблюдений, без масштабирования C.
 odd_abs_2ch -- ЦПТ-фильтр с каналами NORMAL(B*mu/2, B*v/2) и HALF_NORMAL(B*v/2) по
 агрегатам окон aggregate(obs, B)['odd_abs_2ch'] тех же исходных наблюдений: один прогноз и
-одна коррекция на окно, C[..., :2] умножены на B один раз, ht = B * raw_ht, без замен.
+одна коррекция на окно, C[..., :2] умножены на B один раз, ht = B * raw_ht, без замен. Наблюдения каналов odd_abs_2ch удаляются по порогу
+(--remove-threshold T, правило run_constant_filter, по каждому каналу): канал k окна
+исключается, если min по сетке |z_k - m_k| > T * max по сетке s_k (B-масштабированная модель;
+для HALF_NORMAL m = 0); оставшиеся каналы дают частичную коррекцию, при удалении обоих --
+только прогноз.
 Конфиг const2s_pareto_clt_odd_abs_2ch загружается только если метод выбран. Для него
 first_collapse_step_odd_abs_2ch и шаги отладочных снимков даны в исходных шагах (окно * B).
 Опция --methods выбирает подмножество методов (по умолчанию все четыре); запускаются только
@@ -21,7 +25,8 @@ from time import monotonic
 import numpy as np
 
 from discretized_filter.config import set_config
-from discretized_filter.core.filter_discrete import DiscreteFilter
+from discretized_filter.core.densities import HALF_NORMAL, NORMAL, make_obs_density
+from discretized_filter.core.filter_discrete import DiscreteFilter, update_density
 from discretized_filter.paths import saved_path_dir
 from run_channel_clt_comparison import CHANNELS
 from run_channel_clt_constant import (
@@ -60,12 +65,17 @@ def parse_args(argv=None):
     parser.add_argument('--sigma-factor', type=float, nargs=2, metavar=('S1', 'S2'),
                         default=(SIGMA_FACTOR, SIGMA_FACTOR),
                         help='sigma_k = S_k * h_k гауссовой подстановки для Y1, Y2')
+    parser.add_argument('--remove-threshold', type=float, default=3.0, metavar='T',
+                        help='порог удаления наблюдений odd_abs_2ch по каналам (в max-std '
+                        'по сетке); inf -- без удаления')
     parser.add_argument('--debug-every', type=int, default=0, metavar='K',
                         help='отладочные снимки маргиналов каждые K исходных наблюдений '
                         '(и на шаге 0) в debug_{метод}.npz; 0 -- выключено')
     args = parser.parse_args(argv)
     if args.debug_every < 0:
         parser.error('--debug-every должен быть неотрицательным')
+    if np.isnan(args.remove_threshold) or args.remove_threshold <= 0:
+        parser.error('--remove-threshold должен быть положительным числом или inf')
     args.methods = [m for m in METHODS if m in set(args.methods)]
     if not all(np.isfinite(v) and v > 0 for v in args.sigma_factor):
         parser.error('--sigma-factor: оба значения должны быть конечными и положительными')
@@ -141,8 +151,46 @@ def uniform_respread(psi, delta, tol):
     return new_psi, info
 
 
+def removal_model(coefficients, kinds):
+    """Средние m_k(n, j) и max-std s_k для правила удаления; coefficients уже B-масштабированы.
+
+    NORMAL: m = coef[..., k, 0]; HALF_NORMAL: m = 0 (наблюдается |W|, W ~ N(0, var));
+    s_k = sqrt(max_{n,j} coef[n, j, k, 1]). Возвращает (means (N, J, K), max_std (K,)).
+    """
+    means = np.zeros(coefficients.shape[:2] + (len(kinds),))
+    for k, kind in enumerate(kinds):
+        if kind == NORMAL:
+            means[..., k] = coefficients[..., k, 0]
+        elif kind != HALF_NORMAL:
+            raise ValueError(f'Удаление наблюдений не поддерживает вид канала {kind}')
+    return means, np.sqrt(coefficients[..., 1].max(axis=(0, 1)))
+
+
+def removal_mask(obs, means, max_std, threshold):
+    """Канал удалён <=> min_{n,j} |obs_k - m_k| > threshold * max_std_k; bool (K,)."""
+    with np.errstate(over='ignore'):
+        limit = threshold * max_std
+    return np.abs(obs - means).min(axis=(0, 1)) > limit
+
+
+def make_channel_updaters(coefficients, kinds):
+    """Коррекция одним каналом k: update_density с 1-канальной obs_density.
+
+    Плотности и срезы коэффициентов строятся один раз. Возвращает функцию
+    (psi, obs, delta, k) -> новая psi.
+    """
+    densities = [make_obs_density([kind]) for kind in kinds]
+    coefs = [np.ascontiguousarray(coefficients[:, :, [k], :]) for k in range(len(kinds))]
+
+    def update(psi, obs, delta, k):
+        return update_density(psi, np.array([obs[k]], dtype=float), coefs[k], delta,
+                              densities[k])
+    return update
+
+
 def run_filter(label, cfg, observations, block_size, snap_windows, progress,
-               checkpoint, out_dir, respread, tol, debug_every=0, clt=False):
+               checkpoint, out_dir, respread, tol, debug_every=0, clt=False,
+               remove_threshold=np.inf):
     """Прогноз, коррекция и (если respread задан) замена при схлопывании.
 
     respread -- None (exact) или функция (psi, delta, tol) -> (new_psi или None, info).
@@ -150,13 +198,18 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
     C[..., :2] умножаются на block_size один раз; шаги first_collapse, отладочных снимков
     и замен выражаются в исходных шагах (окно * block_size); progress/checkpoint,
     заданные в исходных шагах, пересчитываются в окна. Только без замен (respread=None).
+    Для clt каналы окна с порогом remove_threshold удаляются (см. removal_mask), inf -- нет
+    удаления: коррекция обоими, одним оставшимся каналом или только прогноз.
 
     Оценки и снимки psi берутся на концах окон (B наблюдений) после замены.
     Возвращает theta_est, y_est, failure, snaps, max_mass (n_windows+1, NaN после
     останова), reset_steps, first_collapse_step (первый шаг, на котором выполнен
     критерий; для методов с заменой совпадает с первой заменой), debug (словарь списков
-    снимков маргиналов на шагах, кратных debug_every, и на шаге 0; пуст при debug_every=0).
+    снимков маргиналов на шагах, кратных debug_every, и на шаге 0; пуст при debug_every=0;
+    для clt содержит ещё накопленные n_removed (2,)), removed (завершённые окна, K) bool для
+    clt, иначе None.
     """
+    removed = None
     pi = cfg.pi / np.sum(cfg.pi * cfg.delta[:, None], axis=1)[:, None]
     coefficients = cfg.C
     if clt:
@@ -165,6 +218,12 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
         window_step, scale = 1, block_size
         progress = max(1, progress // block_size) if progress else 0
         checkpoint = max(1, checkpoint // block_size) if checkpoint else 0
+        kinds = [ch.kind for ch in cfg.channels]
+        removed = np.zeros((len(observations), len(kinds)), dtype=bool)
+        n_removed = np.zeros(len(kinds), dtype=int)
+        if np.isfinite(remove_threshold):
+            means, max_std = removal_model(coefficients, kinds)
+            channel_update = make_channel_updaters(coefficients, kinds)
     else:
         window_step, scale = block_size, 1
     filt = DiscreteFilter(cfg.p0[:, None] * pi, pi, cfg.M_net, coefficients,
@@ -179,6 +238,8 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
         marg = compute_marginals(filt.psi, filt.delta, cfg.nets)
         mass = filt.psi * filt.delta[:, None]
         n, j = np.unravel_index(np.argmax(mass), mass.shape)
+        if clt:
+            debug.setdefault('n_removed', []).append(n_removed.copy())
         for key, value in (('step', step), ('marg_theta', marg['theta']),
                            ('marg_y1', marg['y1']), ('marg_y2', marg['y2']),
                            ('max_mass', mass[n, j]), ('argmax_n', n), ('argmax_j', j),
@@ -195,7 +256,17 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
     for step, obs in enumerate(observations, 1):
         try:
             filt.predict()
-            filt.update(obs)
+            if clt and np.isfinite(remove_threshold):
+                gone = removal_mask(obs, means, max_std, remove_threshold)
+                kept = np.flatnonzero(~gone)
+                if len(kept) == len(gone):
+                    filt.update(obs)
+                elif len(kept):
+                    filt.psi = channel_update(filt.psi, obs, filt.delta, int(kept[0]))
+                removed[step - 1] = gone
+                n_removed += gone
+            else:
+                filt.update(obs)
             if respread is not None:
                 new_psi, info = respread(filt.psi, filt.delta, tol)
                 if new_psi is not None:
@@ -230,9 +301,11 @@ def run_filter(label, cfg, observations, block_size, snap_windows, progress,
                      step=step, requested_steps=total, complete=step == total,
                      theta_est=np.array(theta_est), y_est=np.array(y_est),
                      max_mass=np.array(max_mass), reset_steps=np.array(resets, dtype=int))
-    print(f'[{label}] завершено {len(theta_est) - 1} окон; замен: {len(resets)}', flush=True)
+    print(f'[{label}] завершено {len(theta_est) - 1} окон; замен: {len(resets)}'
+          + (f'; удалено по каналам: {n_removed.tolist()}' if clt else ''), flush=True)
     return (np.array(theta_est), np.array(y_est), failure, snaps,
-            np.array(max_mass), np.array(resets, dtype=int), first_collapse, debug)
+            np.array(max_mass), np.array(resets, dtype=int), first_collapse, debug,
+            None if removed is None else removed[:len(theta_est) - 1])
 
 
 def main():
@@ -281,6 +354,7 @@ def main():
                    n_raw=n_raw, n_blocks=n_blocks,
                    density_time=times[snap_windows],
                    density_windows=np.array(snap_windows),
+                   remove_threshold=args.remove_threshold,
                    collapse_tol=args.collapse_tol, debug_every=args.debug_every, sigma_factor=np.array(args.sigma_factor, dtype=float),
                    config_name_pareto_raw=cfg._config_name,
                    config_source_pareto_raw=source,
@@ -306,7 +380,7 @@ def main():
              f'exact_uniform: замена на равномерную плотность на сетке состояния n* '
              f'при том же критерии.',
              f'{CLT_METHOD}: ЦПТ-фильтр (NORMAL + HALF_NORMAL) по агрегатам окон, '
-             f'один шаг на окно, C[..., :2] * B, ht = B * raw_ht, без замен.',
+             f'один шаг на окно, C[..., :2] * B, ht = B * raw_ht, без замен, удаление по порогу.',
              'RMSE на общих завершённых концах окон; начальная точка исключена.',
              f'Постоянный сигнал: theta={args.theta}, Y={args.y_true.tolist()}.',
              f'Окон: {n_blocks}; горизонт: {times[-1]:g} с; снимки на окнах {snap_windows}.',
@@ -319,10 +393,11 @@ def main():
     for method in args.methods:
         is_clt = method == CLT_METHOD
         mcfg = clt_cfg if is_clt else cfg
-        th, yy, failure, snaps, mm, resets, first, debug = run_filter(
+        th, yy, failure, snaps, mm, resets, first, debug, removed = run_filter(
             f'{LAW}_{method}', mcfg, inputs_clt if is_clt else obs, B,
             set(snap_windows), args.progress, args.checkpoint, out_dir,
-            respreads[method], args.collapse_tol, args.debug_every, clt=is_clt)
+            respreads[method], args.collapse_tol, args.debug_every, clt=is_clt,
+            remove_threshold=args.remove_threshold)
         if args.debug_every:
             np.savez(out_dir / f'debug_{method}.npz',
                      **{k: np.array(v) for k, v in debug.items()},
@@ -343,6 +418,12 @@ def main():
         else:
             payload[f'reset_steps_{method}'] = resets
             payload[f'n_resets_{method}'] = len(resets)
+        if is_clt:
+            payload[f'observation_removed_{LAW}_{method}'] = removed
+            payload[f'n_removed_{LAW}_{method}'] = removed.sum(axis=0)
+            lines.append(f'{method}: порог удаления {args.remove_threshold:g}; удалено '
+                         f'наблюдений по каналам (NORMAL, HALF_NORMAL): '
+                         f'{removed.sum(axis=0).tolist()} из {done} окон')
         complete = complete and done == n_blocks
         lines.append(f'Статус {LAW}/{method}: {done}/{n_blocks} окон')
         shapes = compute_marginals(cfg.pi, cfg.delta, cfg.nets)
