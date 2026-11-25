@@ -18,6 +18,7 @@ PARETO = 2
 EXPONENTIAL = 3
 UNIFORM = 4
 HALF_NORMAL = 5  # |N(0, var)|; наблюдается модуль центрированной суммы
+ONESIDED_NORMAL = 6  # loc + scale*tau, tau = 1 + (|Z| - m)/c, Z ~ N(0, 1)
 
 # Число используемых слотов параметров для каждого вида канала.
 _N_PARAMS = {
@@ -27,6 +28,7 @@ _N_PARAMS = {
     EXPONENTIAL: 2,  # (loc, scale)
     UNIFORM: 2,      # (loc, scale)
     HALF_NORMAL: 2,  # (0, дисперсия)
+    ONESIDED_NORMAL: 2,  # (loc, scale)
 }
 
 
@@ -38,7 +40,7 @@ def n_params_for(kind):
             f'неизвестный вид канала наблюдения: {kind}; '
             f'доступны NORMAL={NORMAL}, POISSON={POISSON}, PARETO={PARETO}, '
             f'EXPONENTIAL={EXPONENTIAL}, UNIFORM={UNIFORM}, '
-            f'HALF_NORMAL={HALF_NORMAL}'
+            f'HALF_NORMAL={HALF_NORMAL}, ONESIDED_NORMAL={ONESIDED_NORMAL}'
         )
     return _N_PARAMS[kind]
 
@@ -88,14 +90,14 @@ class ObsChannel:
                 raise ValueError(
                     'ObsChannel(kind=PARETO) требует loc, scale и alpha'
                 )
-        elif kind in (EXPONENTIAL, UNIFORM):
+        elif kind in (EXPONENTIAL, UNIFORM, ONESIDED_NORMAL):
+            name = {EXPONENTIAL: 'EXPONENTIAL', UNIFORM: 'UNIFORM',
+                    ONESIDED_NORMAL: 'ONESIDED_NORMAL'}[kind]
             if self.loc is None or self.scale is None:
-                name = 'EXPONENTIAL' if kind == EXPONENTIAL else 'UNIFORM'
                 raise ValueError(
                     f'ObsChannel(kind={name}) требует loc и scale'
                 )
             if self.alpha is not None:
-                name = 'EXPONENTIAL' if kind == EXPONENTIAL else 'UNIFORM'
                 raise ValueError(
                     f'ObsChannel(kind={name}) не использует alpha'
                 )
@@ -104,7 +106,7 @@ class ObsChannel:
                 'ObsChannel.noise несовместим с intensity'
             )
         pareto_gen = (self.loc, self.scale, self.alpha)
-        if kind not in (EXPONENTIAL, UNIFORM) and (
+        if kind not in (EXPONENTIAL, UNIFORM, ONESIDED_NORMAL) and (
                 any(f is not None for f in pareto_gen)
                 and any(f is None for f in pareto_gen)):
             raise ValueError(
@@ -166,6 +168,24 @@ def uniform_obs_pdf(x, loc, scale):
     if e < 0.5 or e > 1.5:
         return 0.0
     return 1.0 / scale
+
+
+@nb.njit(nb.float64(nb.float64, nb.float64, nb.float64),
+         fastmath=True, cache=True)
+def onesided_normal_obs_pdf(x, loc, scale):
+    """Плотность ``loc + scale*tau``, ``tau = 1 + (|Z| - m)/c``, ``Z ~ N(0, 1)``.
+
+    ``m = sqrt(2/pi)``, ``c = sqrt(12)*sqrt(1 - 2/pi)``: E tau = 1, D tau = 1/12.
+    """
+    if scale <= 0.0:
+        return 0.0
+    m = math.sqrt(2.0 / math.pi)
+    c = math.sqrt(12.0) * math.sqrt(1.0 - 2.0 / math.pi)
+    e = (x - loc) / scale
+    a = m + c * (e - 1.0)
+    if a < 0.0:
+        return 0.0
+    return (c / scale) * 2.0 * math.exp(-0.5 * a * a) / math.sqrt(2.0 * math.pi)
 
 
 @nb.njit(nb.float64(nb.float64, nb.float64), fastmath=True, cache=True)
@@ -234,6 +254,14 @@ def make_obs_density(kinds):
                 d = 0.0
                 for r in range(n_comp):
                     d += (u[r] / ht) * uniform_obs_pdf(
+                        obs[k], comp[r, k, 0], comp[r, k, 1]
+                    )
+                res *= d
+            elif kind == ONESIDED_NORMAL:
+                # Точная location-scale модель: смесь по временам пребывания.
+                d = 0.0
+                for r in range(n_comp):
+                    d += (u[r] / ht) * onesided_normal_obs_pdf(
                         obs[k], comp[r, k, 0], comp[r, k, 1]
                     )
                 res *= d

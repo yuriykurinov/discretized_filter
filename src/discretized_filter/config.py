@@ -21,7 +21,7 @@ from discretized_filter.paths import CONFIGS_DIR
 from discretized_filter.utils.grids import set_seed, cartesian_product
 from discretized_filter.utils.distributions import get_pi_family, build_pi
 from discretized_filter.core.densities import (
-    NORMAL, POISSON, PARETO, EXPONENTIAL, UNIFORM, HALF_NORMAL,
+    NORMAL, POISSON, PARETO, EXPONENTIAL, UNIFORM, HALF_NORMAL, ONESIDED_NORMAL,
     n_params_for, make_obs_density,
 )
 from discretized_filter.core.filter import filter_step as generic_filter_step
@@ -120,6 +120,13 @@ def _build_get_obs(channels):
                 'порождающий процесс get_obs для него не определён'
             )
         return get_obs_unsupported
+    if any(ch.kind == ONESIDED_NORMAL for ch in channels):
+        def get_obs_unsupported_onesided(t_net_filtering, theta, y, t):
+            raise ValueError(
+                'ONESIDED_NORMAL задаёт только плотность фильтра; '
+                'порождающий процесс get_obs для него не определён'
+            )
+        return get_obs_unsupported_onesided
     std_fns = tuple(
         _make_std_fn(ch.var) if (ch.intensity is None and ch.loc is None) else None
         for ch in channels
@@ -280,7 +287,7 @@ def _build(module, path):
                 C[n, :, k, 0] = ch.loc(-1, M_net[n], -1)[:, 0]
                 C[n, :, k, 1] = ch.scale(-1, M_net[n], -1)[:, 0]
                 C[n, :, k, 2] = ch.alpha(-1, M_net[n], -1)[:, 0]
-            elif ch.kind in (EXPONENTIAL, UNIFORM):
+            elif ch.kind in (EXPONENTIAL, UNIFORM, ONESIDED_NORMAL):
                 C[n, :, k, 0] = ch.loc(-1, M_net[n], -1)[:, 0]
                 C[n, :, k, 1] = ch.scale(-1, M_net[n], -1)[:, 0]
             else:
@@ -311,10 +318,11 @@ def _build(module, path):
                     f'(из {bad_scale.size}); pareto_obs_pdf вырождается в '
                     'тождественный ноль в обоих случаях'
                 )
-        elif ch.kind in (EXPONENTIAL, UNIFORM):
+        elif ch.kind in (EXPONENTIAL, UNIFORM, ONESIDED_NORMAL):
             bad_scale = ~(C[:, :, k, 1] > 0)
             if np.any(bad_scale):
-                name = 'EXPONENTIAL' if ch.kind == EXPONENTIAL else 'UNIFORM'
+                name = {EXPONENTIAL: 'EXPONENTIAL', UNIFORM: 'UNIFORM',
+                        ONESIDED_NORMAL: 'ONESIDED_NORMAL'}[ch.kind]
                 raise AssertionError(
                     f'канал {k} ({name}): scale <= 0 в '
                     f'{int(bad_scale.sum())} узлах сетки '
