@@ -1,10 +1,14 @@
-"""Постоянный сигнал, Lambda = 0: RMSE(t) по R траекториям, 5 законов, 4 фильтра.
+"""Постоянный сигнал, одно состояние (N = 1): RMSE(t) по R траекториям, 5 законов, 4 фильтра.
 
 Законы шума tau (E tau = 1, D tau = 1/12): uniform, halfnormal, exponential,
 pareto45, pareto25. Фильтры: exact (по каждому наблюдению) и ЦПТ-фильтры
 full_1ch, full_2ch, odd_abs_2ch (агрегаты окон по B наблюдений) на одной и той же
-реализации. Theta и Y фиксированы аргументами. Параллельно по задачам (закон, путь).
-План: plans/20261125-constant-mc-rmse.md.
+реализации. Конфиги const1s_*; сетка --grid N1 [N2] общая для всех фильтров.
+Истинные (p, q): фиксированы аргументом --y P Q либо (по умолчанию) случайны для
+каждого пути: p ~ U[5,10], q ~ U[10,15] (интервалы из конфига), генерируются ПОСЛЕ
+tau из того же ГПСЧ пути, поэтому поток tau одинаков в обоих режимах. RMSE каждого
+пути считается относительно его собственной истины. Параллельно по задачам (закон, путь).
+План: plans/20261125-constant-mc-rmse.md (дополнение 2026-11-26).
 """
 import os
 
@@ -24,19 +28,17 @@ import numpy as np
 from discretized_filter.config import set_config
 from discretized_filter.core.filter_discrete import DiscreteFilter
 from discretized_filter.paths import saved_path_dir
-from run_channel_clt_constant import (
-    Y1_INTERVALS, Y2_INTERVALS, n_windows, resolve_truth,
-)
+from run_channel_clt_constant import n_windows
 from run_channel_clt_split_comparison import aggregate, check_configs, check_moments
 
 LAWS = ('uniform', 'halfnormal', 'exponential', 'pareto45', 'pareto25')
 CLT_METHODS = ('full_1ch', 'full_2ch', 'odd_abs_2ch')
 METHODS = ('exact',) + CLT_METHODS
-RAW_CONFIGS = {'uniform': 'const2s_uniform_exact',
-               'halfnormal': 'const2s_halfnormal_exact',
-               'exponential': 'const2s_exponential_exact',
-               'pareto45': 'const2s_pareto45_exact',
-               'pareto25': 'const2s_pareto_exact'}
+RAW_CONFIGS = {'uniform': 'const1s_uniform_exact',
+               'halfnormal': 'const1s_halfnormal_exact',
+               'exponential': 'const1s_exponential_exact',
+               'pareto45': 'const1s_pareto45_exact',
+               'pareto25': 'const1s_pareto25_exact'}
 PARETO_ALPHA = {'pareto45': 4.5, 'pareto25': 2.5}
 
 
@@ -57,10 +59,21 @@ def sample_tau(law, alpha, size, rng):
     raise ValueError(f'неизвестный закон {law}')
 
 
-def sample_observations(law, alpha, y, n_raw, rng):
-    """X_i = p + q*tau_i, форма (n_raw, 1)."""
+def sample_path(law, alpha, y_fixed, intervals, n_raw, rng):
+    """Один путь: сначала tau (n_raw значений), затем (p, q) из того же rng.
+
+    y_fixed -- None (случайные p ~ U[lo1, hi1], q ~ U[lo2, hi2]) или пара (p, q);
+    при фиксированном Y rng после tau не используется. Возвращает X формы
+    (n_raw, 1) и истину y_true формы (2,).
+    """
     tau = sample_tau(law, alpha, n_raw, rng)
-    return (y[0] + y[1] * tau)[:, None]
+    if y_fixed is None:
+        p = rng.uniform(*intervals[0])
+        q = rng.uniform(*intervals[1])
+        y_true = np.array([p, q])
+    else:
+        y_true = np.asarray(y_fixed, dtype=float)
+    return (y_true[0] + y_true[1] * tau)[:, None], y_true
 
 
 def parse_args(argv=None):
@@ -69,15 +82,18 @@ def parse_args(argv=None):
     parser.add_argument('--methods', default=','.join(METHODS))
     parser.add_argument('--n-paths', type=int, default=50)
     parser.add_argument('--hours', type=float, default=24.0)
-    parser.add_argument('--theta', type=int, choices=(0, 1), default=0)
-    parser.add_argument('--y', type=float, nargs=2, metavar=('Y1', 'Y2'), default=None,
-                        help='по умолчанию середины интервалов выбранного theta')
+    parser.add_argument('--grid', type=int, nargs='+', metavar='N', default=[50, 50],
+                        help='число узлов по p и q для ВСЕХ фильтров: N1 [N2] '
+                        '(одно число -- на обе координаты), каждое >= 2')
+    parser.add_argument('--y', type=float, nargs=2, metavar=('P', 'Q'), default=None,
+                        help='фиксированные истинные (p, q) для всех путей; '
+                        'по умолчанию случайные для каждого пути из интервалов конфига')
     parser.add_argument('--block-size', type=int, default=20)
     parser.add_argument('--seed', type=int, default=20260803)
     parser.add_argument('--workers', type=int, default=None,
                         help='по умолчанию SLURM_CPUS_PER_TASK или os.cpu_count(); '
                         '1 -- последовательно в этом процессе')
-    parser.add_argument('--exp-id', default='constant_mc_rmse')
+    parser.add_argument('--exp-id', default='constant_mc_rmse_1s')
     parser.add_argument('--overwrite', action='store_true',
                         help='разрешить перезапись существующего comparison.npz')
     parser.add_argument('--checkpoint-every', type=int, default=10,
@@ -104,10 +120,9 @@ def parse_args(argv=None):
         args.workers = int(os.environ.get('SLURM_CPUS_PER_TASK') or os.cpu_count() or 1)
     if args.workers < 1:
         parser.error('--workers должен быть >= 1')
-    try:
-        args.y_true = resolve_truth(args.theta, args.y)
-    except ValueError as exc:
-        parser.error(str(exc))
+    if len(args.grid) not in (1, 2) or any(g < 2 for g in args.grid):
+        parser.error('--grid: одно или два целых числа, каждое >= 2')
+    args.grid = [args.grid[0], args.grid[-1]]
     args.n_blocks = n_windows(args.hours, args.block_size)
     if args.n_blocks < 1:
         parser.error('--hours слишком мал для одного полного окна')
@@ -119,11 +134,14 @@ def parse_args(argv=None):
 _CFG_CACHE = {}
 
 
-def _cfg(name, block_size, scale_ht):
-    """Конфиг с кешем на процесс; для ЦПТ-конфигов ht = B * raw_ht (raw_ht = 1)."""
-    key = (name, block_size, scale_ht)
+def _cfg(name, block_size, scale_ht, grid):
+    """Конфиг с кешем на процесс; для ЦПТ-конфигов ht = B * raw_ht (raw_ht = 1).
+
+    grid -- число узлов (N1, N2) по p и q, подставляется в num1 конфига."""
+    grid = tuple(int(g) for g in grid)
+    key = (name, block_size, scale_ht, grid)
     if key not in _CFG_CACHE:
-        cfg = set_config(name)
+        cfg = set_config(name, num1=list(grid))
         if scale_ht:
             cfg.ht = block_size * 1.0  # B * raw_ht, raw_ht = 1 (проверяется check_moments)
         _CFG_CACHE[key] = cfg
@@ -168,43 +186,47 @@ def run_filter(cfg, observations, block_size, window_step):
 
 def run_task(task):
     """Одна задача (закон, путь): генерирует X и прогоняет выбранные методы."""
-    law, r, seed_seq, y_true, n_blocks, block_size, methods = task
+    law, r, seed_seq, y_fixed, n_blocks, block_size, methods, grid = task
     start = monotonic()
     B = block_size
-    raw = _cfg(RAW_CONFIGS[law], B, False)
+    raw = _cfg(RAW_CONFIGS[law], B, False, grid)
     alpha = float(raw.C[0, 0, 0, 2]) if law in PARETO_ALPHA else None
-    obs = sample_observations(law, alpha, y_true, n_blocks * B, np.random.default_rng(seed_seq))
+    intervals = [raw.y_intervals[0][0], raw.y_intervals[1][0]]
+    obs, y_true = sample_path(law, alpha, y_fixed, intervals, n_blocks * B,
+                              np.random.default_rng(seed_seq))
     aggs = aggregate(obs, B)
     out = {}
     for method in methods:
         if method == 'exact':
             out[method] = run_filter(raw, obs, B, B)
         else:
-            cfg = _cfg(f'const2s_clt_{method}', B, True)
+            cfg = _cfg(f'const1s_clt_{method}', B, True, grid)
             out[method] = run_filter(cfg, aggs[method], B, 1)
     elapsed = monotonic() - start
     print(f'[{law} path {r}] {elapsed:.1f} с; ' + ', '.join(
         f'{m}: {int(np.isfinite(v[0][:, 0]).sum()) - 1}/{n_blocks}' for m, v in out.items()),
         flush=True)
-    return law, r, out, elapsed
+    return law, r, out, elapsed, y_true
 
 
 # --- агрегация и сохранение -------------------------------------------------
 
-def rmse_curves(theta_est, y_est, methods, theta, y_true):
-    """RMSE(t) на общем наборе живых путей; ключи (метод, величина) и n_alive."""
+def rmse_curves(theta_est, y_est, methods, y_true):
+    """RMSE(t) на общем наборе живых путей; ключи (метод, величина) и n_alive.
+
+    y_true [R, 2] -- истина каждого пути; theta (N = 1) всегда 0."""
     R, W1, N = next(iter(theta_est.values())).shape
     alive = np.ones((R, W1), dtype=bool)
     for m in methods:
         alive &= (np.isfinite(theta_est[m]).all(axis=2) & np.isfinite(y_est[m]).all(axis=2))
     n_alive = alive.sum(axis=0)
-    onehot = np.eye(N)[theta]
+    onehot = np.eye(N)[0]
     curves = {}
     for m in methods:
         with np.errstate(invalid='ignore', divide='ignore'):
             e_th = np.where(alive, ((theta_est[m] - onehot) ** 2).mean(axis=2), np.nan)
-            e1 = np.where(alive, (y_est[m][..., 0] - y_true[0]) ** 2, np.nan)
-            e2 = np.where(alive, (y_est[m][..., 1] - y_true[1]) ** 2, np.nan)
+            e1 = np.where(alive, (y_est[m][..., 0] - y_true[:, None, 0]) ** 2, np.nan)
+            e2 = np.where(alive, (y_est[m][..., 1] - y_true[:, None, 1]) ** 2, np.nan)
             for key, e in (('theta', e_th), ('y1', e1), ('y2', e2)):
                 # окна, где все пути NaN, дают NaN без предупреждений
                 with warnings.catch_warnings():
@@ -217,7 +239,10 @@ def rmse_curves(theta_est, y_est, methods, theta, y_true):
 def build_payload(args, state, cfg_info, times, complete):
     payload = dict(cfg_info)
     payload.update(
-        times=times, theta_const=args.theta, y_const=args.y_true, seed=args.seed,
+        times=times, theta_const=0,
+        y_const=np.full(2, np.nan) if args.y is None else np.array(args.y),
+        y_mode='random' if args.y is None else 'fixed',
+        grid=np.array(args.grid), seed=args.seed,
         laws=np.array(args.law_list), methods=np.array(args.method_list),
         block_size=args.block_size, n_paths=args.n_paths, n_blocks=args.n_blocks,
         requested_hours=args.hours, workers=args.workers, filter_engine='DiscreteFilter',
@@ -230,10 +255,11 @@ def build_payload(args, state, cfg_info, times, complete):
             payload[f'y_est_{law}_{m}'] = st['y'][m]
             payload[f'failure_{law}_{m}'] = np.array(st['failure'][m])
             payload[f'completed_{law}_{m}'] = st['completed'][m]
+        payload[f'y_true_{law}'] = st['y_true']
         payload[f'task_done_{law}'] = st['done']
         payload[f'task_seconds_{law}'] = st['seconds']
         curves, n_alive = rmse_curves(st['theta'], st['y'], args.method_list,
-                                      args.theta, args.y_true)
+                                      st['y_true'])
         payload[f'n_alive_{law}'] = n_alive
         lines.append(f'{law}: путей завершено {int(st["done"].sum())}/{args.n_paths}; '
                      f'живых на последнем окне {n_alive[-1]}')
@@ -258,7 +284,10 @@ def save_archive(out_dir, payload, lines, complete, args):
     np.savez(tmp, **payload)
     os.replace(tmp, out_dir / 'comparison.npz')
     head = ['ЗАВЕРШЕНО' if complete else 'НЕПОЛНЫЙ ПРОГОН',
-            f'Постоянный сигнал: theta={args.theta}, Y={args.y_true.tolist()}.',
+            'Постоянный сигнал, одно состояние (N = 1).',
+            f'Сетка (p, q): {args.grid[0]}x{args.grid[1]}; истинные (p, q): '
+            + (f'фиксированы {list(args.y)}' if args.y is not None
+               else 'случайные для каждого пути, p ~ U[5,10], q ~ U[10,15]') + '.',
             f'Окон: {args.n_blocks}; B={args.block_size}; путей на закон: {args.n_paths}; '
             f'seed={args.seed}.',
             'RMSE(t) на общем наборе путей, где все выбранные методы дошли до окна w.']
@@ -278,9 +307,10 @@ def main():
     # проверки конфигов в главном процессе
     cfg_info, named = {}, []
     raws = {}
-    clts = {m: _cfg(f'const2s_clt_{m}', B, True) for m in CLT_METHODS}
+    grid = tuple(args.grid)
+    clts = {m: _cfg(f'const1s_clt_{m}', B, True, grid) for m in CLT_METHODS}
     for law in args.law_list:
-        raws[law] = raw = _cfg(RAW_CONFIGS[law], B, False)
+        raws[law] = raw = _cfg(RAW_CONFIGS[law], B, False, grid)
         if law in PARETO_ALPHA:
             alphas = np.unique(raw.C[..., 2])
             if not np.all(alphas == PARETO_ALPHA[law]):
@@ -290,14 +320,18 @@ def main():
         cfg_info[f'config_name_{law}'] = RAW_CONFIGS[law]
         cfg_info[f'config_source_{law}'] = raw._config_path.read_text(encoding='utf-8')
     for m, cfg in clts.items():
-        named.append((f'const2s_clt_{m}', cfg))
-        cfg_info[f'config_name_{m}'] = f'const2s_clt_{m}'
+        named.append((f'const1s_clt_{m}', cfg))
+        cfg_info[f'config_name_{m}'] = f'const1s_clt_{m}'
         cfg_info[f'config_source_{m}'] = cfg._config_path.read_text(encoding='utf-8')
     check_configs(named)
     ref = raws[args.law_list[0]]
-    if (not np.array_equal(ref.y_intervals[0], Y1_INTERVALS)
-            or not np.array_equal(ref.y_intervals[1], Y2_INTERVALS)):
-        raise ValueError('Y1_INTERVALS/Y2_INTERVALS не совпадают с конфигами')
+    if ref.N != 1:
+        raise ValueError('ожидается конфиг с одним состоянием (N = 1)')
+    lo1, hi1 = ref.y_intervals[0][0]
+    lo2, hi2 = ref.y_intervals[1][0]
+    if args.y is not None and not (lo1 <= args.y[0] <= hi1 and lo2 <= args.y[1] <= hi2):
+        raise SystemExit(f'--y {args.y} вне интервалов p in [{lo1}, {hi1}], '
+                         f'q in [{lo2}, {hi2}]')
     N, W = ref.N, args.n_blocks
     times = np.arange(W + 1) * B * ref.ht
 
@@ -307,7 +341,7 @@ def main():
     for law in args.law_list:
         path_ss = law_ss[law].spawn(R)
         spawn_keys[f'seed_spawn_keys_{law}'] = np.array([s.spawn_key for s in path_ss])
-        tasks += [(law, r, path_ss[r], args.y_true, W, B, tuple(args.method_list))
+        tasks += [(law, r, path_ss[r], args.y, W, B, tuple(args.method_list), grid)
                   for r in range(R)]
     cfg_info.update(spawn_keys)
 
@@ -316,6 +350,7 @@ def main():
         y={m: np.full((R, W + 1, 2), np.nan) for m in args.method_list},
         failure={m: [''] * R for m in args.method_list},
         completed={m: np.full(R, -1, dtype=int) for m in args.method_list},
+        y_true=np.full((R, 2), np.nan),
         done=np.zeros(R, dtype=bool), seconds=np.full(R, np.nan))
         for law in args.law_list}
 
@@ -328,8 +363,9 @@ def main():
                                                 encoding='utf-8')
 
     def record(result):
-        law, r, out, elapsed = result
+        law, r, out, elapsed, y_true = result
         st = state[law]
+        st['y_true'][r] = y_true
         for m, (th, yy, failure) in out.items():
             st['theta'][m][r], st['y'][m][r] = th, yy
             st['failure'][m][r] = failure

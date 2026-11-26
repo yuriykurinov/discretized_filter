@@ -383,9 +383,13 @@ def _build(module, path):
     return cfg
 
 
-def set_config(name=None):
+def set_config(name=None, **overrides):
     """Устанавливает активный конфиг и публикует его величины в этот модуль
-    (``name`` по умолчанию берётся из DFILTER_CONFIG)."""
+    (``name`` по умолчанию берётся из DFILTER_CONFIG).
+
+    ``overrides`` -- именованные значения, которые присваиваются атрибутам
+    загруженного модуля конфига до построения производных величин (например,
+    ``num1=[20, 30]``); имя, которого нет в модуле конфига, -- ValueError."""
     global _ACTIVE
 
     if name is None:
@@ -398,6 +402,14 @@ def set_config(name=None):
 
     path = _resolve_config_path(name)
     module = _load_config_module(path)
+
+    for key, value in overrides.items():
+        if not hasattr(module, key):
+            raise ValueError(
+                f'set_config: в конфиге {path.name} нет атрибута {key!r} '
+                'для переопределения'
+            )
+        setattr(module, key, value)
 
     # сеем все ГПСЧ до того, как что-либо случайное могло произойти:
     # numpy (глобальный RandomState), numpy Generator и джитованный ГПСЧ
