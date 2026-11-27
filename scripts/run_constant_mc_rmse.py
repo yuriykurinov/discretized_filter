@@ -1,4 +1,4 @@
-"""Постоянный сигнал, одно состояние (N = 1): RMSE(t) по R траекториям, 5 законов, 4 фильтра.
+"""Постоянный сигнал, одно состояние (N = 1): MSE(t) и квантили по R траекториям, 5 законов, 4 фильтра.
 
 Законы шума tau (E tau = 1, D tau = 1/12): uniform, halfnormal, exponential,
 pareto45, pareto25. Фильтры: exact (по каждому наблюдению) и ЦПТ-фильтры
@@ -8,7 +8,10 @@ full_1ch, full_2ch, odd_abs_2ch (агрегаты окон по B наблюде
 каждого пути: p ~ U[5,10], q ~ U[10,15] (интервалы из конфига), генерируются ПОСЛЕ
 tau из того же ГПСЧ пути, поэтому поток tau одинаков в обоих режимах. RMSE каждого
 пути считается относительно его собственной истины. Параллельно по задачам (закон, путь).
-План: plans/20261125-constant-mc-rmse.md (дополнение 2026-11-26).
+Архив компактный: theta не хранится; для каждого (закон, метод) и окна w -- MSE и
+квантили 0.05/0.95 квадрата ошибки p и q по общему набору живых путей; оценки y_est
+сохраняются только для первых --save-paths путей.
+План: plans/20261125-constant-mc-rmse.md (дополнения 2026-11-26, 2026-11-27).
 """
 import os
 
@@ -93,6 +96,9 @@ def parse_args(argv=None):
     parser.add_argument('--workers', type=int, default=None,
                         help='по умолчанию SLURM_CPUS_PER_TASK или os.cpu_count(); '
                         '1 -- последовательно в этом процессе')
+    parser.add_argument('--save-paths', type=int, default=3, metavar='K',
+                        help='сколько первых путей (r = 0..K-1) сохранить с оценками '
+                        'y_est в архиве, 0 <= K <= --n-paths')
     parser.add_argument('--exp-id', default='constant_mc_rmse_1s')
     parser.add_argument('--overwrite', action='store_true',
                         help='разрешить перезапись существующего comparison.npz')
@@ -114,6 +120,8 @@ def parse_args(argv=None):
         parser.error('--hours должен быть конечным положительным числом')
     if args.n_paths < 1:
         parser.error('--n-paths должен быть >= 1')
+    if not 0 <= args.save_paths <= args.n_paths:
+        parser.error('--save-paths должен быть в диапазоне 0..--n-paths')
     if args.checkpoint_every < 0:
         parser.error('--checkpoint-every должен быть неотрицательным')
     if args.workers is None:
@@ -211,71 +219,79 @@ def run_task(task):
 
 # --- агрегация и сохранение -------------------------------------------------
 
-def rmse_curves(theta_est, y_est, methods, y_true):
-    """RMSE(t) на общем наборе живых путей; ключи (метод, величина) и n_alive.
+QUANTILE_LEVELS = (('q05', 0.05), ('q95', 0.95))
 
-    y_true [R, 2] -- истина каждого пути; theta (N = 1) всегда 0."""
-    R, W1, N = next(iter(theta_est.values())).shape
+
+def error_stats(y_est, methods, y_true):
+    """MSE и квантили e^2 на общем наборе живых путей.
+
+    y_est[m] [R, W+1, 2], y_true [R, 2]. alive_w -- пути, где ВСЕ методы дошли до w.
+    Возвращает (stats, n_alive, n_reached): stats[(m, coord, key)] [W+1], coord in
+    {'p', 'q'}, key in {'mse', 'q05', 'q95'}; NaN там, где alive_w пуст.
+    """
+    R, W1, _ = y_est[methods[0]].shape
+    reached = {m: np.isfinite(y_est[m]).all(axis=2) for m in methods}
     alive = np.ones((R, W1), dtype=bool)
     for m in methods:
-        alive &= (np.isfinite(theta_est[m]).all(axis=2) & np.isfinite(y_est[m]).all(axis=2))
+        alive &= reached[m]
     n_alive = alive.sum(axis=0)
-    onehot = np.eye(N)[0]
-    curves = {}
+    stats = {}
     for m in methods:
-        with np.errstate(invalid='ignore', divide='ignore'):
-            e_th = np.where(alive, ((theta_est[m] - onehot) ** 2).mean(axis=2), np.nan)
-            e1 = np.where(alive, (y_est[m][..., 0] - y_true[:, None, 0]) ** 2, np.nan)
-            e2 = np.where(alive, (y_est[m][..., 1] - y_true[:, None, 1]) ** 2, np.nan)
-            for key, e in (('theta', e_th), ('y1', e1), ('y2', e2)):
+        for i, coord in enumerate(('p', 'q')):
+            e2 = np.where(alive, (y_est[m][..., i] - y_true[:, None, i]) ** 2, np.nan)
+            with warnings.catch_warnings():
                 # окна, где все пути NaN, дают NaN без предупреждений
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore', RuntimeWarning)
-                    mean_e = np.nanmean(e, axis=0)
-                curves[(m, key)] = np.where(n_alive > 0, np.sqrt(mean_e), np.nan)
-    return curves, n_alive
+                warnings.simplefilter('ignore', RuntimeWarning)
+                stats[(m, coord, 'mse')] = np.nanmean(e2, axis=0)
+                for key, level in QUANTILE_LEVELS:
+                    stats[(m, coord, key)] = np.nanquantile(e2, level, axis=0)
+    n_reached = {m: reached[m].sum(axis=0) for m in methods}
+    return stats, n_alive, n_reached
 
 
 def build_payload(args, state, cfg_info, times, complete):
+    K = args.save_paths
     payload = dict(cfg_info)
     payload.update(
-        times=times, theta_const=0,
+        times=times,
         y_const=np.full(2, np.nan) if args.y is None else np.array(args.y),
         y_mode='random' if args.y is None else 'fixed',
         grid=np.array(args.grid), seed=args.seed,
         laws=np.array(args.law_list), methods=np.array(args.method_list),
         block_size=args.block_size, n_paths=args.n_paths, n_blocks=args.n_blocks,
+        saved_paths=K,
         requested_hours=args.hours, workers=args.workers, filter_engine='DiscreteFilter',
         complete=complete)
     lines = []
     for law in args.law_list:
         st = state[law]
+        stats, n_alive, n_reached = error_stats(st['y'], args.method_list, st['y_true'])
         for m in args.method_list:
-            payload[f'theta_est_{law}_{m}'] = st['theta'][m]
-            payload[f'y_est_{law}_{m}'] = st['y'][m]
+            payload[f'y_est_{law}_{m}'] = st['y'][m][:K]
             payload[f'failure_{law}_{m}'] = np.array(st['failure'][m])
             payload[f'completed_{law}_{m}'] = st['completed'][m]
+            payload[f'n_reached_{law}_{m}'] = n_reached[m]
+            for coord in ('p', 'q'):
+                payload[f'mse_{coord}_{law}_{m}'] = stats[(m, coord, 'mse')]
+                for key, _ in QUANTILE_LEVELS:
+                    payload[f'sqerr_{key}_{coord}_{law}_{m}'] = stats[(m, coord, key)]
         payload[f'y_true_{law}'] = st['y_true']
         payload[f'task_done_{law}'] = st['done']
         payload[f'task_seconds_{law}'] = st['seconds']
-        curves, n_alive = rmse_curves(st['theta'], st['y'], args.method_list,
-                                      st['y_true'])
         payload[f'n_alive_{law}'] = n_alive
         lines.append(f'{law}: путей завершено {int(st["done"].sum())}/{args.n_paths}; '
                      f'живых на последнем окне {n_alive[-1]}')
         for m in args.method_list:
-            for key in ('theta', 'y1', 'y2'):
-                payload[f'rmse_{key}_{law}_{m}'] = curves[(m, key)]
-            payload[f'n_reached_{law}_{m}'] = np.isfinite(st['theta'][m][..., 0]).sum(axis=0)
             nfail = sum(1 for f in st['failure'][m] if f)
-            with np.errstate(all='ignore'):
-                mean_tail = [np.nanmean(curves[(m, k)][1:]) if args.n_blocks >= 1
-                             and np.isfinite(curves[(m, k)][1:]).any() else np.nan
-                             for k in ('theta', 'y1', 'y2')]
-            last = [curves[(m, k)][-1] for k in ('theta', 'y1', 'y2')]
-            lines.append(f'  {m:12s} отказов {nfail}; последнее окно RMSE '
-                         f'theta/Y1/Y2 = ' + ' '.join(f'{v:.6g}' for v in last)
-                         + '; среднее по w>=1 = ' + ' '.join(f'{v:.6g}' for v in mean_tail))
+            parts = []
+            for coord in ('p', 'q'):
+                mse = stats[(m, coord, 'mse')]
+                with warnings.catch_warnings():
+                    warnings.simplefilter('ignore', RuntimeWarning)
+                    tail = np.nanmean(mse[1:]) if np.isfinite(mse[1:]).any() else np.nan
+                parts.append(f'{coord}: MSE {mse[-1]:.6g} (sqrt {np.sqrt(mse[-1]):.6g}), '
+                             f'среднее по w>=1 {tail:.6g} (sqrt {np.sqrt(tail):.6g})')
+            lines.append(f'  {m:12s} отказов {nfail}; последнее окно / ' + '; '.join(parts))
     return payload, lines
 
 
@@ -290,7 +306,9 @@ def save_archive(out_dir, payload, lines, complete, args):
                else 'случайные для каждого пути, p ~ U[5,10], q ~ U[10,15]') + '.',
             f'Окон: {args.n_blocks}; B={args.block_size}; путей на закон: {args.n_paths}; '
             f'seed={args.seed}.',
-            'RMSE(t) на общем наборе путей, где все выбранные методы дошли до окна w.']
+            'MSE и квантили (0.05, 0.95) квадрата ошибки на общем наборе путей, где все '
+            'выбранные методы дошли до окна w; оценки хранятся для первых '
+            f'{args.save_paths} путей.']
     summary = '\n'.join(head + lines) + '\n'
     (out_dir / 'summary.txt').write_text(summary, encoding='utf-8')
     return summary
@@ -332,7 +350,7 @@ def main():
     if args.y is not None and not (lo1 <= args.y[0] <= hi1 and lo2 <= args.y[1] <= hi2):
         raise SystemExit(f'--y {args.y} вне интервалов p in [{lo1}, {hi1}], '
                          f'q in [{lo2}, {hi2}]')
-    N, W = ref.N, args.n_blocks
+    W = args.n_blocks
     times = np.arange(W + 1) * B * ref.ht
 
     # сиды: порядок законов фиксирован (LAWS), путь r не зависит от R и набора законов
@@ -346,7 +364,6 @@ def main():
     cfg_info.update(spawn_keys)
 
     state = {law: dict(
-        theta={m: np.full((R, W + 1, N), np.nan) for m in args.method_list},
         y={m: np.full((R, W + 1, 2), np.nan) for m in args.method_list},
         failure={m: [''] * R for m in args.method_list},
         completed={m: np.full(R, -1, dtype=int) for m in args.method_list},
@@ -367,7 +384,7 @@ def main():
         st = state[law]
         st['y_true'][r] = y_true
         for m, (th, yy, failure) in out.items():
-            st['theta'][m][r], st['y'][m][r] = th, yy
+            st['y'][m][r] = yy  # theta (N = 1) не сохраняется
             st['failure'][m][r] = failure
             st['completed'][m][r] = int(np.isfinite(th[:, 0]).sum()) - 1
         st['done'][r] = True
